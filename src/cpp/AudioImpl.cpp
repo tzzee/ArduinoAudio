@@ -4,6 +4,7 @@
  */
 
 #include "../AudioImpl.h"
+#include <Arduino.h>
 
 AudioImpl::AudioImpl(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t bitLength, std::uint16_t bufferMsec, std::uint8_t channelNum):
   sampleRate(sampleRate), bitDepth(bitDepth), bitLength(bitLength), bufferMsec(bufferMsec), channelNum(channelNum),
@@ -43,4 +44,20 @@ std::size_t AudioImpl::getBufferLength() const {
 
 std::size_t const AudioImpl::getPayloadSize() const {
   return payloadLength;
+}
+
+bool AudioImpl::waitForWritable(std::uint32_t /*maxWaitMsec*/) {
+  const bool writable = getPayloadSize() <= availableForWrite();
+  if(!writable) {
+    delay(1);
+  }
+  return writable;
+}
+
+bool AudioImpl::waitForReadable(std::uint32_t /*maxWaitMsec*/) {
+  const bool readable = getPayloadSize() <= available();
+  if(!readable) {
+    delay(1);
+  }
+  return readable;
 }

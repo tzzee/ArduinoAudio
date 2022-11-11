@@ -10,7 +10,6 @@
 #include <freertos/FreeRTOS.h>
 #include <driver/i2s.h>
 
-#define I2S_EVENT_ENABLED
 // #define I2S_LEGACY_API_ENABLED
 
 class I2SAudio: public AudioImpl{
@@ -52,18 +51,30 @@ class I2SAudio: public AudioImpl{
 
   uint8_t getBufferCount() const;
 
- private:
-  std::size_t _i2s_read_bytes(void *dest);
-  std::size_t _i2s_write_bytes(const void *src);
+  virtual bool waitForWritable(std::uint32_t maxWaitMsec = UINT32_MAX) override;
+  virtual bool waitForReadable(std::uint32_t maxWaitMsec = UINT32_MAX) override;
 
+ protected:
+  enum I2SAudioStatus {
+    I2SAudioStop,
+    I2SAudioOscillation,
+    I2SAudioStart
+  };
+  void _start(I2SAudioStatus s);
+  
  private:
-  void _eventQueue();
+  
+  bool _eventQueue(TickType_t);
+  bool _recvQueue(i2s_event_type_t type);
+
   const I2SAudioConfig audioConfig;
   const i2s_config_t i2sConfig;
 
 
-  bool installed;
+  volatile I2SAudioStatus status;
 
+  std::size_t txEmpty;
+  std::size_t rxFilled;
   bool txDone;
   bool rxDone;
   char *txBuffer;

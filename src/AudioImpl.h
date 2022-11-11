@@ -49,6 +49,9 @@ class AudioImpl: public virtual Audio{
 
   virtual const std::size_t getPayloadSize() const override;
 
+  virtual bool waitForWritable(std::uint32_t maxWaitMsec = UINT32_MAX) override;
+  virtual bool waitForReadable(std::uint32_t maxWaitMsec = UINT32_MAX) override;
+
  private:
   const std::uint16_t sampleRate;
   const std::uint8_t bitDepth;

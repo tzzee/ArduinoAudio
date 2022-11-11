@@ -60,8 +60,11 @@ size_t Esp32BuiltinDacAudio::read(std::uint8_t *buffer, std::size_t length) {
 
 size_t Esp32BuiltinDacAudio::write(const std::uint8_t *buffer, std::size_t length) {
   // length==getPayloadSize()
+  uint8_t tmp[super::getPayloadSize()];
+  if (length <= available()) {
+    super::read(reinterpret_cast<uint8_t*>(tmp), super::getPayloadSize());
+  }
   if (length <= availableForWrite()) {
-    uint8_t tmp[super::getPayloadSize()];
     const int16_t *b = reinterpret_cast<const int16_t*>(buffer);
     int16_t *t = reinterpret_cast<int16_t*>(tmp);
     for (size_t i = 0; i < getBufferLength(); i++) {

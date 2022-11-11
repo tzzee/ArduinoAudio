@@ -34,12 +34,12 @@ I2SAudio::I2SAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t
         .bits_per_sample = (i2s_bits_per_sample_t)getBitDepth(),
         .channel_format = audioConfig.chFormat,
         .communication_format = audioConfig.comFormat,
-        .intr_alloc_flags = 0,
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
         .dma_buf_count = bufferCount,
         .dma_buf_len = (int)getBufferLength() ,
-        .use_apll = false
+        // .use_apll = false
       }),
-      installed(false) {
+      status(I2SAudioStop) {
   txBuffer = new char[I2SAudio::getPayloadSize()];  // virtualではなく、自分を呼ぶ
   rxBuffer = new char[I2SAudio::getPayloadSize()];  // virtualではなく、自分を呼ぶ
   initRtcPin(audioConfig.pinConfig.bck_io_num);
@@ -58,19 +58,26 @@ std::uint8_t I2SAudio::getBufferCount() const {
 }
 
 
+void I2SAudio::start() {
+  _start(I2SAudioStart);
+  txEmpty = getBufferCount();
+  rxFilled = getBufferCount();
+}
+
 //  start DAC
 //  DAC_Start()後は、DMAバッファが空になる前にDAC_Write()で出力データを書き込むこと
-void I2SAudio::start() {
+void I2SAudio::_start(I2SAudioStatus s) {
   I2SAudio::stop();  // virtualではなく、自分を呼ぶ
   deinitRtcPin(audioConfig.pinConfig.bck_io_num);
   deinitRtcPin(audioConfig.pinConfig.ws_io_num);
   deinitRtcPin(audioConfig.pinConfig.data_out_num);
-#ifdef I2S_EVENT_ENABLED
-  static const int i2s_event_queue_size = 3;
-  i2s_driver_install(audioConfig.port, &i2sConfig, i2s_event_queue_size, &i2s_event_queue);
-#else
-  i2s_driver_install(audioConfig.port, &i2sConfig, 0, NULL);
-#endif
+
+  if(s == I2SAudioOscillation) {
+    i2s_driver_install(audioConfig.port, &i2sConfig, 0, NULL);
+  } else {
+    i2s_driver_install(audioConfig.port, &i2sConfig, getBufferCount()*2, &i2s_event_queue);
+  }
+
   const bool hasPinConfig = 0<=audioConfig.pinConfig.bck_io_num ||
                       0<=audioConfig.pinConfig.ws_io_num ||
                       0<=audioConfig.pinConfig.data_out_num ||
@@ -89,142 +96,181 @@ void I2SAudio::start() {
     } break;
   }
   i2s_start(audioConfig.port);
-  installed = true;
+  txDone = false;
+  rxDone = false;
+  txEmpty = 0;
+  rxFilled = 0;
   zero();
-  rxDone = !(i2sConfig.mode & I2S_MODE_RX);
+  status = s;
 }
 
 //  stop DAC
 //  データ出力後、DMAバッファが空になる前にこの関数を呼び出すこと
 void I2SAudio::stop() {
-  if (installed) {
+  if (status != I2SAudioStop) {
     i2s_stop(audioConfig.port);
     i2s_driver_uninstall(audioConfig.port);  // stop & destroy i2s driver
     initRtcPin(audioConfig.pinConfig.bck_io_num);
     initRtcPin(audioConfig.pinConfig.ws_io_num);
     initRtcPin(audioConfig.pinConfig.data_out_num);
-    installed = false;
+    status = I2SAudioStop;
   }
 }
 
 void I2SAudio::zero() {
   i2s_zero_dma_buffer(audioConfig.port);
-  txDone = true;
+  txEmpty = getBufferCount();
 }
 
-void I2SAudio::_eventQueue() {
-  static const TickType_t ticks_to_wait = 0;
-#ifdef I2S_EVENT_ENABLED
-  i2s_event_t event;
-  if (xQueueReceive(i2s_event_queue, &event, ticks_to_wait) == pdTRUE) {
-    switch (event.type) {
-      case I2S_EVENT_DMA_ERROR: {
-      } break;
-      case I2S_EVENT_TX_DONE: {
-        // All buffers are empty. This means we have an underflow on our hands.
-        if (txDone) {
-          memset(txBuffer, 0, I2SAudio::getPayloadSize());
-          txDone = false;
-        }
-      } break;
-      case I2S_EVENT_RX_DONE: {
-        // All buffers are full. This means we have an overflow.
-        rxDone = false;
-      } break;
-      default: { } break; }
-  }
-#endif
-  if (!txDone) {
-#ifdef I2S_LEGACY_API_ENABLED
-    int bytesWritten = i2s_write_bytes(audioConfig.port, txBuffer, I2SAudio::getPayloadSize(), ticks_to_wait);
-#else
-    int bytesWritten = 0;
-    size_t write_len = 0;
-    while (1) {
-      esp_err_t ret =
-          i2s_write(audioConfig.port, (const char *)txBuffer + bytesWritten,
-                    I2SAudio::getPayloadSize() - bytesWritten, &write_len, ticks_to_wait);
-      bytesWritten += write_len;
-      if (I2SAudio::getPayloadSize() == bytesWritten || ret != ESP_OK) {
-        break;
+bool I2SAudio::_recvQueue(i2s_event_type_t type) {
+  switch (type) {
+    case I2S_EVENT_DMA_ERROR: {
+      log_e("I2C: Error");
+    } break;
+    case I2S_EVENT_TX_DONE: {
+      // All buffers are empty. This means we have an underflow on our hands.
+      txEmpty = getBufferCount();
+#if 0
+      if(!txDone) {
+        memset(txBuffer, 0, I2SAudio::getPayloadSize());
+        txDone = true;
       }
+#endif
+      return true;
+    } break;
+    case I2S_EVENT_RX_DONE: {
+      // All buffers are full. This means we have an overflow.
+      rxFilled = getBufferCount();
+      return true;
+    } break;
+    default: { } break;
+  }
+  return false;
+}
+
+bool I2SAudio::_eventQueue(TickType_t ticks_to_wait) {
+  const std::uint32_t startMsec = millis();
+  static std::uint32_t lastMsec = millis();
+  i2s_event_t event;
+  log_v("%d", uxQueueMessagesWaiting(i2s_event_queue));
+
+  if(txEmpty || rxFilled) {
+    ticks_to_wait = 0;
+  }
+  if (xQueueReceive(i2s_event_queue, &event, std::min((TickType_t)getBufferMsec()*getBufferCount(), ticks_to_wait)) == pdTRUE) {
+    bool done = false;
+    done |= _recvQueue(event.type);
+    while (xQueueReceive(i2s_event_queue, &event, 0) == pdTRUE) {
+      // recv all queue
+      done |= _recvQueue(event.type);
+    }
+    if(done) lastMsec = millis();
+  } else if(lastMsec+(std::uint32_t)getBufferMsec()*getBufferCount()<=startMsec){
+    // must be empty
+    log_w("i2s: event timeout");
+    txEmpty = getBufferCount();
+    rxFilled = getBufferCount();
+    lastMsec = millis();
+  }
+
+  // write
+  if(txEmpty && txDone) {
+#ifdef I2S_LEGACY_API_ENABLED
+    int bytesWritten = i2s_write_bytes(audioConfig.port, (const char *)txBuffer, I2SAudio::getPayloadSize(), ticks_to_wait);
+#else
+    std::size_t bytesWritten = 0;
+    esp_err_t ret = i2s_write(audioConfig.port, (const char *)txBuffer, I2SAudio::getPayloadSize(), &bytesWritten, ticks_to_wait);
+    if (ret != ESP_OK) {
+      bytesWritten = 0;
     }
 #endif
     if (I2SAudio::getPayloadSize() <= bytesWritten) {
-      txDone = true;
+      txEmpty--;
+      txDone = false;
+      lastMsec = millis();
+    } else {
+      txEmpty = 0;
     }
   }
-  if (!rxDone) {
+
+  // read
+  if(rxFilled && !rxDone) {
 #ifdef I2S_LEGACY_API_ENABLED
-    int bytesRead = i2s_read_bytes(audioConfig.port, rxBuffer, I2SAudio::getPayloadSize(), ticks_to_wait);
+    int bytesRead = i2s_read_bytes(audioConfig.port, (char *)rxBuffer, I2SAudio::getPayloadSize(), ticks_to_wait);
 #else
-    int bytesRead = 0;
-    size_t read_len = 0;
-    while (1) {
-      esp_err_t ret = i2s_read(audioConfig.port, reinterpret_cast<char *>(rxBuffer) + bytesRead,
-                               I2SAudio::getPayloadSize() - bytesRead, &read_len, ticks_to_wait);
-      bytesRead += read_len;
-      if (I2SAudio::getPayloadSize() <= bytesRead || ret != ESP_OK) {
-        break;
-      }
+    std::size_t bytesRead = 0;
+    esp_err_t ret = i2s_read(audioConfig.port, reinterpret_cast<char *>(rxBuffer), I2SAudio::getPayloadSize(), &bytesRead, ticks_to_wait);
+    if (ret != ESP_OK) {
+      bytesRead = 0;
     }
 #endif
     if (I2SAudio::getPayloadSize() <= bytesRead) {
-      rxDone = true;
+      rxFilled--;
+      rxDone = true;  // バッファにreadが入っている
+      lastMsec = millis();
+    } else {
+      rxFilled = 0;
     }
   }
+
+  return true;
 }
 
-size_t I2SAudio::_i2s_read_bytes(void *dest) {
+
+size_t I2SAudio::read(std::uint8_t* buffer, std::size_t length) {
+  size_t s = 0;
   if (!rxDone) {
-    _eventQueue();
+    _eventQueue(0);
   }
   if (rxDone) {
-    memcpy(dest, rxBuffer, I2SAudio::getPayloadSize());
+    memcpy(buffer, rxBuffer, I2SAudio::getPayloadSize());
     rxDone = false;
-    return I2SAudio::getPayloadSize();
-  }
-  return 0;
-}
-
-size_t I2SAudio::_i2s_write_bytes(const void *src) {
-  size_t s = 0;
-  if (txDone) {
-    memcpy(txBuffer, src, I2SAudio::getPayloadSize());
-    txDone = false;
     s = I2SAudio::getPayloadSize();
   }
-  _eventQueue();
   return s;
 }
 
-  size_t I2SAudio::read(std::uint8_t* buffer, std::size_t length) {
-    log_v("%d %d", length, I2SAudio::available());
-    // length==I2SAudio::getPayloadSize()
-    if (length <= I2SAudio::available()) {
-      return _i2s_read_bytes((void*)buffer);
-    }
-    return 0;
+size_t I2SAudio::write(const std::uint8_t* buffer, std::size_t length) {
+  size_t s = 0;
+  if (length <= I2SAudio::getPayloadSize()) {
+    memcpy(txBuffer, buffer, I2SAudio::getPayloadSize());
+    txDone = true;
+    s = I2SAudio::getPayloadSize();
   }
-  size_t I2SAudio::write(const std::uint8_t* buffer, std::size_t length) {
-    log_v("%d %d", length, I2SAudio::availableForWrite());
-    // length==I2SAudio::getPayloadSize()
-    if (length <= I2SAudio::availableForWrite()) {
-      return _i2s_write_bytes((const void*)buffer);
-    }
-    return 0;
-  }
+  _eventQueue(0);
+  return s;
+}
 
 int I2SAudio::availableForWrite() {
-  if (!txDone) {
-    _eventQueue();
+  if(status != I2SAudioStart) {
+    return 0;
   }
-  return txDone ? I2SAudio::getPayloadSize() : 0;
+  _eventQueue(0);
+  return txEmpty ? I2SAudio::getPayloadSize() : 0;
 }
 
 int I2SAudio::available() { /*ForRead*/
-  if (!rxDone) {
-    _eventQueue();
+  if(status != I2SAudioStart) {
+    return 0;
   }
-  return rxDone ? I2SAudio::getPayloadSize() : 0;
+  _eventQueue(0);
+  return rxFilled ? I2SAudio::getPayloadSize() : 0;
+}
+
+bool I2SAudio::waitForWritable(std::uint32_t maxWaitMsec) {
+  if(status != I2SAudioStart) {
+    delay(1000);
+    return false;
+  }
+  _eventQueue((TickType_t)maxWaitMsec);
+  return txEmpty;
+}
+
+bool I2SAudio::waitForReadable(std::uint32_t maxWaitMsec) {
+  if(status != I2SAudioStart) {
+    delay(1000);
+    return false;
+  }
+  _eventQueue((TickType_t)maxWaitMsec);
+  return rxFilled;
 }

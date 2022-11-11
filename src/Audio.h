@@ -64,6 +64,10 @@ class Audio {
    * @return buffer length (bytes)
    */
   virtual const std::size_t getPayloadSize() const = 0;
+
+  virtual bool waitForWritable(std::uint32_t maxWaitMsec = UINT32_MAX) = 0;
+
+  virtual bool waitForReadable(std::uint32_t maxWaitMsec = UINT32_MAX) = 0;
 };
 
 #endif  // LIB_ARDUINO_AUDIO_AUDIO_H_
