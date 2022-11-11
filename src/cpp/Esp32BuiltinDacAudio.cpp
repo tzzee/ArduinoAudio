@@ -8,7 +8,12 @@
 #include <esp32-hal.h>
 
 #define CH_NUM 2
+
+#if ARDUINO_AUDIO_SWAPCHANNEL_DISABLED
+static const int channelIndexRL = 1;
+#else
 static const int channelIndexRL = 0;
+#endif
 
 Esp32BuiltinDacAudio::Esp32BuiltinDacAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t alignedBitLength, std::uint16_t bufferMsec,
   uint8_t bufferCount, const Esp32BuiltinDacAudioConfig& config): 
