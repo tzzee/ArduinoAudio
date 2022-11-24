@@ -9,7 +9,7 @@
 
 #define CH_NUM 2
 
-#if ARDUINO_AUDIO_SWAPCHANNEL_DISABLED
+#if defined(ARDUINO_AUDIO_SWAPCHANNEL_DISABLED) || defined(PLATFORMIO)
 static const int channelIndexRL = 1;
 #else
 static const int channelIndexRL = 0;
