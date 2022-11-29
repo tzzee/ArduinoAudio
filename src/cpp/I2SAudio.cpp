@@ -57,6 +57,9 @@ std::uint8_t I2SAudio::getBufferCount() const {
   return i2sConfig.dma_buf_count;
 }
 
+void I2SAudio::begin() {
+  i2s_driver_install(audioConfig.port, &i2sConfig, getBufferCount()*2, &i2s_event_queue);
+}
 
 void I2SAudio::start() {
   _start(I2SAudioStart);
@@ -71,12 +74,6 @@ void I2SAudio::_start(I2SAudioStatus s) {
   deinitRtcPin(audioConfig.pinConfig.bck_io_num);
   deinitRtcPin(audioConfig.pinConfig.ws_io_num);
   deinitRtcPin(audioConfig.pinConfig.data_out_num);
-
-  if(s == I2SAudioOscillation) {
-    i2s_driver_install(audioConfig.port, &i2sConfig, 0, NULL);
-  } else {
-    i2s_driver_install(audioConfig.port, &i2sConfig, getBufferCount()*2, &i2s_event_queue);
-  }
 
   const bool hasPinConfig = 0<=audioConfig.pinConfig.bck_io_num ||
                       0<=audioConfig.pinConfig.ws_io_num ||
@@ -109,7 +106,6 @@ void I2SAudio::_start(I2SAudioStatus s) {
 void I2SAudio::stop() {
   if (status != I2SAudioStop) {
     i2s_stop(audioConfig.port);
-    i2s_driver_uninstall(audioConfig.port);  // stop & destroy i2s driver
     initRtcPin(audioConfig.pinConfig.bck_io_num);
     initRtcPin(audioConfig.pinConfig.ws_io_num);
     initRtcPin(audioConfig.pinConfig.data_out_num);

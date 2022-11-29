@@ -26,6 +26,7 @@ class I2SAudio: public AudioImpl{
   I2SAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t alignedBitLength, std::uint16_t bufferMsec, std::uint8_t channelNum,
     std::uint8_t bufferCount, const I2SAudioConfig& config);
   virtual ~I2SAudio();
+  virtual void begin() override;
   virtual void start() override;
   virtual void stop() override;
   virtual void zero() override;
