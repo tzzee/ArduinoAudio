@@ -153,6 +153,7 @@ bool I2SAudio::_eventQueue(TickType_t ticks_to_wait) {
   if(txEmpty || rxFilled) {
     ticks_to_wait = 0;
   }
+  const std::uint32_t elapsedMsec = startMsec - lastMsec;
   if (xQueueReceive(i2s_event_queue, &event, std::min((TickType_t)getBufferMsec()*getBufferCount(), ticks_to_wait)) == pdTRUE) {
     bool done = false;
     done |= _recvQueue(event.type);
@@ -161,7 +162,7 @@ bool I2SAudio::_eventQueue(TickType_t ticks_to_wait) {
       done |= _recvQueue(event.type);
     }
     if(done) lastMsec = millis();
-  } else if(lastMsec+(std::uint32_t)getBufferMsec()*getBufferCount()<=startMsec){
+  } else if((std::uint32_t)getBufferMsec()*getBufferCount()<=elapsedMsec){
     // must be empty
     log_w("i2s: event timeout");
     txEmpty = getBufferCount();
