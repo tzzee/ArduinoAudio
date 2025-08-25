@@ -15,6 +15,12 @@ class Esp32BuiltinDacAudio : public I2SAudio {
     i2s_port_t port;
     i2s_pin_config_t pinConfig;
   };
+  enum DacStatus {
+    DacStarting, // 0->0.5
+    DacRunning,  // 0.5
+    DacStopping, // 0.5->0
+    DacStopped,  // 0
+  } dacStatus = DacStopped;
 
   Esp32BuiltinDacAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t alignedBitLength, std::uint16_t bufferMsec,
     uint8_t bufferCount, const Esp32BuiltinDacAudioConfig& config = {
@@ -24,7 +30,7 @@ class Esp32BuiltinDacAudio : public I2SAudio {
         .ws_io_num = -1,
         .data_out_num = -1,
         .data_in_num = -1
-      }
+      },
     });
 
   /**
@@ -47,6 +53,10 @@ class Esp32BuiltinDacAudio : public I2SAudio {
    * @brief 音声出力の停止。
    */
   virtual void stop() override;
+
+  virtual void zero() override;
+  
+  void fill(int16_t v);
 
   virtual const std::size_t getPayloadSize() const override;
 

@@ -33,21 +33,75 @@ Esp32BuiltinDacAudio::~Esp32BuiltinDacAudio() {
 }
 
 void Esp32BuiltinDacAudio::begin() {
+  super::begin();
 }
 
 //  start DAC
 //  DAC_Start()後は、DMAバッファが空になる前にDAC_Write()で出力データを書き込むこと
 void Esp32BuiltinDacAudio::start() {
-  super::start();
+  super::start(); // 中でzeroが呼ばれる
   i2s_set_dac_mode(I2S_DAC_CHANNEL_RIGHT_EN);
+  dacStatus = DacStarting;
+  zero();  // DACの出力を0から中立にする
+  dacStatus = DacRunning;
+  zero();  // DACの出力を中立にする
 }
 
 //  stop DAC
 //  データ出力後、DMAバッファが空になる前にこの関数を呼び出すこと
 void Esp32BuiltinDacAudio::stop() {
-  zero();
-  delay(getBufferMsec() * getBufferCount());
+  dacStatus = DacStopping;
+  zero();  // DACの出力を中立から0にする
+  dacStatus = DacStopped;
+  zero();  // DACの出力を0にする
   super::stop();
+}
+
+void Esp32BuiltinDacAudio::zero() {
+  const int32_t bottom = INT16_MIN;  // DACの0V
+  uint8_t tmp[getPayloadSize()];
+  int16_t *t = reinterpret_cast<int16_t*>(tmp);
+  switch (dacStatus)
+  {
+  case DacStarting: {
+    for(size_t j = 0; j < getBufferCount(); j++) {
+      for(size_t i = 0; i < getBufferLength(); i++) {
+        const int16_t v = bottom-(bottom*(int32_t)(j*getBufferLength()+i)/(int32_t)(getBufferCount()*getBufferLength()));
+        t[i] = v;
+      }
+      waitForWritable();
+      write(reinterpret_cast<const uint8_t*>(tmp), getPayloadSize());
+    }
+  } break;
+  case DacRunning: {
+    fill(0);
+  } break;
+  case DacStopping: {
+    for(size_t j = 0; j < getBufferCount(); j++) {
+      for(size_t i = 0; i < getBufferLength(); i++) {
+        const int16_t v = bottom*(1-(j*getBufferLength()+i)/(getBufferCount()*getBufferLength()));
+        t[i] = v;
+      }
+      waitForWritable();
+      write(reinterpret_cast<const uint8_t*>(tmp), getPayloadSize());
+    }
+  } break;
+  case DacStopped: {
+    fill(bottom);
+  } break;
+  }
+}
+
+void Esp32BuiltinDacAudio::fill(int16_t v) {
+  uint8_t tmp[getPayloadSize()];
+  int16_t *t = reinterpret_cast<int16_t*>(tmp);
+  for(size_t j = 0; j < getBufferCount(); j++) {
+    for(size_t i = 0; i < getBufferLength(); i++) {
+      t[i] = v;
+    }
+    waitForWritable();
+    write(reinterpret_cast<const uint8_t*>(tmp), getPayloadSize());
+  }
 }
 
 std::size_t const Esp32BuiltinDacAudio::getPayloadSize() const {

@@ -58,13 +58,17 @@ std::uint8_t I2SAudio::getBufferCount() const {
 }
 
 void I2SAudio::begin() {
-  i2s_driver_install(audioConfig.port, &i2sConfig, getBufferCount()*2, &i2s_event_queue);
+  ESP_ERROR_CHECK(i2s_driver_install(audioConfig.port, &i2sConfig, getBufferCount()*2, &i2s_event_queue));
 }
 
 void I2SAudio::start() {
   _start(I2SAudioStart);
-  txEmpty = getBufferCount();
-  rxFilled = getBufferCount();
+  if (((uint8_t)i2sConfig.mode & (uint8_t)I2S_MODE_TX) == (uint8_t)I2S_MODE_TX) {
+    txEmpty = getBufferCount();
+  }
+  if (((uint8_t)i2sConfig.mode & (uint8_t)I2S_MODE_RX) == (uint8_t)I2S_MODE_RX) {
+    rxFilled = getBufferCount();
+  }
 }
 
 //  start DAC
@@ -92,7 +96,7 @@ void I2SAudio::_start(I2SAudioStatus s) {
       i2s_set_clk(audioConfig.port, i2sConfig.sample_rate, i2sConfig.bits_per_sample, I2S_CHANNEL_MONO);
     } break;
   }
-  i2s_start(audioConfig.port);
+  ESP_ERROR_CHECK(i2s_start(audioConfig.port));
   txDone = false;
   rxDone = false;
   txEmpty = 0;
@@ -165,8 +169,12 @@ bool I2SAudio::_eventQueue(TickType_t ticks_to_wait) {
   } else if((std::uint32_t)getBufferMsec()*getBufferCount()<=elapsedMsec){
     // must be empty
     log_w("i2s: event timeout");
-    txEmpty = getBufferCount();
-    rxFilled = getBufferCount();
+    if (((uint8_t)i2sConfig.mode & (uint8_t)I2S_MODE_TX) == (uint8_t)I2S_MODE_TX) {
+      txEmpty = getBufferCount();
+    }
+    if (((uint8_t)i2sConfig.mode & (uint8_t)I2S_MODE_RX) == (uint8_t)I2S_MODE_RX) {
+      rxFilled = getBufferCount();
+    }
     lastMsec = millis();
   }
 
