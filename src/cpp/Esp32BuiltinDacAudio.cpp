@@ -6,6 +6,7 @@
 #include "../Esp32BuiltinDacAudio.h"
 #include <assert.h>
 #include <esp32-hal.h>
+#include <algorithm>
 
 #define CH_NUM 2
 
@@ -16,7 +17,7 @@ static const int channelIndexRL = 0;
 #endif
 
 Esp32BuiltinDacAudio::Esp32BuiltinDacAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t alignedBitLength, std::uint16_t bufferMsec,
-  uint8_t bufferCount, const Esp32BuiltinDacAudioConfig& config): 
+  uint8_t bufferCount, std::uint16_t dcCutOffFrequency, const Esp32BuiltinDacAudioConfig& config): 
     super(sampleRate, bitDepth, alignedBitLength, bufferMsec, CH_NUM,
     bufferCount,
     {
@@ -25,11 +26,12 @@ Esp32BuiltinDacAudio::Esp32BuiltinDacAudio(std::uint16_t sampleRate, std::uint8_
       .chFormat = I2S_CHANNEL_FMT_RIGHT_LEFT,
       .comFormat = I2S_COMM_FORMAT_I2S_LSB,
       .pinConfig = config.pinConfig
-    }){
+    }), dcCutOffFrequency(dcCutOffFrequency), highPassFilterArray(dcCutOffFrequency?new std::int16_t[getSampRate()*dcCutOffFrequency/1000]:nullptr) {
 }
 
 Esp32BuiltinDacAudio::~Esp32BuiltinDacAudio() {
   Esp32BuiltinDacAudio::stop();  // virtualではなく、自分を呼ぶ
+  delete highPassFilterArray;
 }
 
 void Esp32BuiltinDacAudio::begin() {
@@ -120,10 +122,24 @@ size_t Esp32BuiltinDacAudio::write(const std::uint8_t *buffer, std::size_t lengt
   }
   if (length <= availableForWrite()) {
     const int16_t *b = reinterpret_cast<const int16_t*>(buffer);
-    int16_t *t = reinterpret_cast<int16_t*>(tmp);
+    uint16_t *t = reinterpret_cast<uint16_t*>(tmp);
     for (size_t i = 0; i < getBufferLength(); i++) {
-      const uint16_t us = ((uint16_t)b[i])^0x8000U;
-      t[i * CH_NUM + channelIndexRL] = (int16_t)us;
+      int16_t s = b[i];
+      if (highPassFilterArray) {
+        // DCオフセットを無理やりINT16_MINに持っていき、ブザーに電流を流さない
+        // カットオフ周波数以下はINT16_MINに張り付くので再現性が悪くなる
+        static uint16_t hpIndex = 0;
+        const uint16_t arrayLength = getSampRate()*dcCutOffFrequency/1000;
+        highPassFilterArray[hpIndex] = s;
+        int16_t minVal = INT16_MAX;
+        for (int i = 0; i < arrayLength; i++) {
+          minVal = std::min(minVal, highPassFilterArray[i]);
+        }
+        s = INT16_MIN-minVal+s;
+        hpIndex = (hpIndex + 1) % (arrayLength);
+      }
+      const uint16_t us = ((uint16_t)s)^0x8000U;  // XOR (signed -> unsigned)
+      t[i * CH_NUM + channelIndexRL] = us;
       t[i * CH_NUM + (1-channelIndexRL)] = 0;
     }
     return super::write(reinterpret_cast<const uint8_t*>(tmp), super::getPayloadSize()) / CH_NUM;
