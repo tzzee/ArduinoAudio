@@ -17,7 +17,7 @@ static const int channelIndexRL = 0;
 #endif
 
 Esp32BuiltinDacAudio::Esp32BuiltinDacAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t alignedBitLength, std::uint16_t bufferMsec,
-  uint8_t bufferCount, std::uint16_t dcCutOffFrequency, const Esp32BuiltinDacAudioConfig& config): 
+  uint8_t bufferCount, i2s_dac_mode_t dac_mode, std::uint16_t dcCutOffFrequency, const Esp32BuiltinDacAudioConfig& config):
     super(sampleRate, bitDepth, alignedBitLength, bufferMsec, CH_NUM,
     bufferCount,
     {
@@ -26,7 +26,7 @@ Esp32BuiltinDacAudio::Esp32BuiltinDacAudio(std::uint16_t sampleRate, std::uint8_
       .chFormat = I2S_CHANNEL_FMT_RIGHT_LEFT,
       .comFormat = I2S_COMM_FORMAT_I2S_LSB,
       .pinConfig = config.pinConfig
-    }), dcCutOffFrequency(dcCutOffFrequency), highPassFilterArray(dcCutOffFrequency?new std::int16_t[getSampRate()*dcCutOffFrequency/1000]:nullptr) {
+    }), dac_mode(dac_mode), dcCutOffFrequency(dcCutOffFrequency), highPassFilterArray(dcCutOffFrequency?new std::int16_t[getSampRate()*dcCutOffFrequency/1000]:nullptr) {
 }
 
 Esp32BuiltinDacAudio::~Esp32BuiltinDacAudio() {
@@ -42,7 +42,7 @@ void Esp32BuiltinDacAudio::begin() {
 //  DAC_Start()後は、DMAバッファが空になる前にDAC_Write()で出力データを書き込むこと
 void Esp32BuiltinDacAudio::start() {
   super::start(); // 中でzeroが呼ばれる
-  i2s_set_dac_mode(I2S_DAC_CHANNEL_RIGHT_EN);
+  // i2s_set_dac_mode(dac_mode);
   dacStatus = DacStarting;
   zero();  // DACの出力を0から中立にする
   dacStatus = DacRunning;
@@ -139,8 +139,8 @@ size_t Esp32BuiltinDacAudio::write(const std::uint8_t *buffer, std::size_t lengt
         hpIndex = (hpIndex + 1) % (arrayLength);
       }
       const uint16_t us = ((uint16_t)s)^0x8000U;  // XOR (signed -> unsigned)
-      t[i * CH_NUM + channelIndexRL] = us;
-      t[i * CH_NUM + (1-channelIndexRL)] = 0;
+      t[i * CH_NUM + channelIndexRL] = (dac_mode&I2S_DAC_CHANNEL_RIGHT_EN)?us:0;
+      t[i * CH_NUM + (1-channelIndexRL)] = (dac_mode&I2S_DAC_CHANNEL_LEFT_EN)?us:0;
     }
     return super::write(reinterpret_cast<const uint8_t*>(tmp), super::getPayloadSize()) / CH_NUM;
   }

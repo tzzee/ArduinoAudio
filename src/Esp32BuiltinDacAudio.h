@@ -21,11 +21,12 @@ class Esp32BuiltinDacAudio : public I2SAudio {
     DacStopping, // 0.5->0
     DacStopped,  // 0
   } dacStatus = DacStopped;
+  const i2s_dac_mode_t dac_mode;
   const std::uint16_t dcCutOffFrequency;
   std::int16_t* highPassFilterArray;
 
   Esp32BuiltinDacAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t alignedBitLength, std::uint16_t bufferMsec,
-    uint8_t bufferCount, std::uint16_t dcCutOffFrequency = 0 /*0以上で有効、指定周波数以下をINT16_MINに貼り付け、スピーカーへ電圧がかかり続けるのを防止する*/,
+    uint8_t bufferCount, i2s_dac_mode_t dac_mode = I2S_DAC_CHANNEL_RIGHT_EN, std::uint16_t dcCutOffFrequency = 0 /*0以上で有効、指定周波数以下をINT16_MINに貼り付け、スピーカーへ電圧がかかり続けるのを防止する*/,
     const Esp32BuiltinDacAudioConfig& config = {
       .port = (i2s_port_t)0,
       .pinConfig = {
