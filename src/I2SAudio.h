@@ -50,7 +50,7 @@ class I2SAudio: public AudioImpl{
   virtual int available() override;
   virtual int availableForWrite() override;
 
-  uint8_t getBufferCount() const;
+  uint8_t getBufferCount() const override;
 
   virtual bool waitForWritable(std::uint32_t maxWaitMsec = UINT32_MAX) override;
   virtual bool waitForReadable(std::uint32_t maxWaitMsec = UINT32_MAX) override;

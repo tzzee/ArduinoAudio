@@ -61,6 +61,11 @@ class Audio {
   virtual std::size_t getBufferLength() const = 0;
 
   /**
+   * @return buffer count
+   */
+  virtual std::uint8_t getBufferCount() const = 0;
+
+  /**
    * @return buffer length (bytes)
    */
   virtual const std::size_t getPayloadSize() const = 0;

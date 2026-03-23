@@ -42,6 +42,10 @@ std::size_t AudioImpl::getBufferLength() const {
   return bufferLength;
 }
 
+std::uint8_t AudioImpl::getBufferCount() const {
+  return 1;
+}
+
 std::size_t const AudioImpl::getPayloadSize() const {
   return payloadLength;
 }

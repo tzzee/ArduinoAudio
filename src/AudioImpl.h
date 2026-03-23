@@ -47,6 +47,11 @@ class AudioImpl: public virtual Audio{
    */
   std::size_t getBufferLength() const override final;
 
+  /**
+   * @return buffer count
+   */
+  std::uint8_t getBufferCount() const override;
+
   virtual const std::size_t getPayloadSize() const override;
 
   virtual bool waitForWritable(std::uint32_t maxWaitMsec = UINT32_MAX) override;
