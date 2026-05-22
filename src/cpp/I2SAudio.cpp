@@ -83,17 +83,24 @@ void I2SAudio::_start(I2SAudioStatus s) {
                       0<=audioConfig.pinConfig.ws_io_num ||
                       0<=audioConfig.pinConfig.data_out_num ||
                       0<=audioConfig.pinConfig.data_in_num;
-
+#if defined(IDF_VER)
+  const uint32_t bits_cfg = ((uint32_t)I2S_BITS_PER_CHAN_32BIT << 16) | (uint32_t)i2sConfig.bits_per_sample;
+#else
+  const uint32_t bits_cfg = (uint32_t)i2sConfig.bits_per_sample;
+#endif
   i2s_set_pin(audioConfig.port, hasPinConfig?&(audioConfig.pinConfig):NULL);
+  i2s_channel_t clock_channel = I2S_CHANNEL_STEREO;
   switch (i2sConfig.channel_format) {
     case I2S_CHANNEL_FMT_RIGHT_LEFT:
     case I2S_CHANNEL_FMT_ALL_RIGHT:
     case I2S_CHANNEL_FMT_ALL_LEFT: {
-      i2s_set_clk(audioConfig.port, i2sConfig.sample_rate, i2sConfig.bits_per_sample, I2S_CHANNEL_STEREO);
+      clock_channel = I2S_CHANNEL_STEREO;
+      i2s_set_clk(audioConfig.port, i2sConfig.sample_rate, bits_cfg, clock_channel);
     } break;
     case I2S_CHANNEL_FMT_ONLY_RIGHT:
     case I2S_CHANNEL_FMT_ONLY_LEFT: {
-      i2s_set_clk(audioConfig.port, i2sConfig.sample_rate, i2sConfig.bits_per_sample, I2S_CHANNEL_MONO);
+      clock_channel = I2S_CHANNEL_MONO;
+      i2s_set_clk(audioConfig.port, i2sConfig.sample_rate, bits_cfg, clock_channel);
     } break;
   }
   ESP_ERROR_CHECK(i2s_start(audioConfig.port));
@@ -125,7 +132,7 @@ void I2SAudio::zero() {
 bool I2SAudio::_recvQueue(i2s_event_type_t type) {
   switch (type) {
     case I2S_EVENT_DMA_ERROR: {
-      log_e("I2C: Error");
+      log_e("I2S: Error");
     } break;
     case I2S_EVENT_TX_DONE: {
       // All buffers are empty. This means we have an underflow on our hands.

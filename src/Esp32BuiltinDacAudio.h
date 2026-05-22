@@ -25,6 +25,9 @@ class Esp32BuiltinDacAudio : public I2SAudio {
   const std::uint16_t dcCutOffFrequency;
   std::int16_t* highPassFilterArray;
 
+  /**
+   * @brief ESP32内蔵DAC用I2S出力を初期化する
+   */
   Esp32BuiltinDacAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t alignedBitLength, std::uint16_t bufferMsec,
     uint8_t bufferCount, i2s_dac_mode_t dac_mode = I2S_DAC_CHANNEL_RIGHT_EN, std::uint16_t dcCutOffFrequency = 0 /*0以上で有効、指定周波数以下をINT16_MINに貼り付け、スピーカーへ電圧がかかり続けるのを防止する*/,
     const Esp32BuiltinDacAudioConfig& config = {
@@ -34,7 +37,7 @@ class Esp32BuiltinDacAudio : public I2SAudio {
         .ws_io_num = -1,
         .data_out_num = -1,
         .data_in_num = -1
-      },
+      }
     });
 
   /**

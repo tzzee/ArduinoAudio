@@ -10,10 +10,22 @@
 
 #define CH_NUM 2
 
-#if defined(ARDUINO_AUDIO_SWAPCHANNEL_DISABLED) || defined(PLATFORMIO)
-static const int channelIndexRL = 1;
+#ifdef IDF_VER
+static const i2s_comm_format_t builtin_dac_comm_format = I2S_COMM_FORMAT_STAND_MSB;
 #else
-static const int channelIndexRL = 0;
+static const i2s_comm_format_t builtin_dac_comm_format = I2S_COMM_FORMAT_I2S_MSB;
+#endif
+
+#ifdef IDF_VER
+static const int default_channel_index_rl = 0;
+#else
+static const int default_channel_index_rl = 1;
+#endif
+
+#ifdef ARDUINO_AUDIO_SWAPCHANNEL_DISABLED
+static const int channelIndexRL = 1 - default_channel_index_rl;
+#else
+static const int channelIndexRL = default_channel_index_rl;
 #endif
 
 Esp32BuiltinDacAudio::Esp32BuiltinDacAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t alignedBitLength, std::uint16_t bufferMsec,
@@ -24,7 +36,7 @@ Esp32BuiltinDacAudio::Esp32BuiltinDacAudio(std::uint16_t sampleRate, std::uint8_
       .port = config.port,
       .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_DAC_BUILT_IN),
       .chFormat = I2S_CHANNEL_FMT_RIGHT_LEFT,
-      .comFormat = I2S_COMM_FORMAT_I2S_LSB,
+      .comFormat = builtin_dac_comm_format,
       .pinConfig = config.pinConfig
     }), dac_mode(dac_mode), dcCutOffFrequency(dcCutOffFrequency), highPassFilterArray(dcCutOffFrequency?new std::int16_t[getSampRate()*dcCutOffFrequency/1000]:nullptr) {
 }
