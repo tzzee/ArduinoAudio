@@ -46,7 +46,33 @@ I2SAudio::I2SAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t
         // .use_apll = false
       }),
       status(I2SAudioStop) {
-  // TX リングバッファ: SPIRAM 優先確保（内部 RAM 圧迫を避ける）
+  ringTxBuffer   = nullptr;
+  ringTxReadIdx  = 0;
+  ringTxWriteIdx = 0;
+  ringTxCount    = 0;
+  rxBuffer = nullptr;  // virtualではなく、自分を呼ぶ。begin()でPSRAM初期化後に確保する
+  initRtcPin(audioConfig.pinConfig.bck_io_num);
+  initRtcPin(audioConfig.pinConfig.ws_io_num);
+  initRtcPin(audioConfig.pinConfig.data_out_num);
+}
+
+I2SAudio::~I2SAudio() {
+  I2SAudio::stop();  // virtualではなく、自分を呼ぶ
+#ifdef ARDUINO_AUDIO_SPIRAM_ENABLED
+  heap_caps_free(ringTxBuffer);
+  heap_caps_free(rxBuffer);
+#else
+  delete[] ringTxBuffer;
+  delete[] rxBuffer;
+#endif
+}
+
+std::uint8_t I2SAudio::getBufferCount() const {
+  return i2sConfig.dma_buf_count;
+}
+
+void I2SAudio::begin() {
+  // PSRAM 初期化後に呼ばれるため、ここで SPIRAM 優先確保する
   const std::size_t ringSize = getBufferCount() * I2SAudio::getPayloadSize();
 #ifdef ARDUINO_AUDIO_SPIRAM_ENABLED
   ringTxBuffer = (char*)heap_caps_malloc(ringSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -55,9 +81,6 @@ I2SAudio::I2SAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t
     log_e("I2SAudio: SPIRAM unavailable, fallback to internal RAM for ring buffer");
     ringTxBuffer = new char[ringSize];
   }
-  ringTxReadIdx  = 0;
-  ringTxWriteIdx = 0;
-  ringTxCount    = 0;
   const std::size_t rxSize = I2SAudio::getPayloadSize();  // virtualではなく、自分を呼ぶ
 #ifdef ARDUINO_AUDIO_SPIRAM_ENABLED
   rxBuffer = (char*)heap_caps_malloc(rxSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -66,22 +89,6 @@ I2SAudio::I2SAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t
     log_e("I2SAudio: SPIRAM unavailable, fallback to internal RAM for rx buffer");
     rxBuffer = new char[rxSize];
   }
-  initRtcPin(audioConfig.pinConfig.bck_io_num);
-  initRtcPin(audioConfig.pinConfig.ws_io_num);
-  initRtcPin(audioConfig.pinConfig.data_out_num);
-}
-
-I2SAudio::~I2SAudio() {
-  I2SAudio::stop();  // virtualではなく、自分を呼ぶ
-  heap_caps_free(ringTxBuffer);
-  heap_caps_free(rxBuffer);
-}
-
-std::uint8_t I2SAudio::getBufferCount() const {
-  return i2sConfig.dma_buf_count;
-}
-
-void I2SAudio::begin() {
   ESP_ERROR_CHECK(i2s_driver_install(audioConfig.port, &i2sConfig, getBufferCount()*2, &i2s_event_queue));
 }
 
