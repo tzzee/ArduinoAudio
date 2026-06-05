@@ -74,11 +74,14 @@ class I2SAudio: public AudioImpl{
 
   volatile I2SAudioStatus status;
 
-  std::size_t txEmpty;
+  // TX リングバッファ: DMA への直接書き込みを廃止し、ソフトウェアバッファ経由でドレイン
+  char *ringTxBuffer;    ///< getBufferCount() スロット分のヒープ領域
+  int ringTxReadIdx;
+  int ringTxWriteIdx;
+  int ringTxCount;       ///< 現在リングにあるバッファ数
+
   std::size_t rxFilled;
-  bool txDone;
   bool rxDone;
-  char *txBuffer;
   char *rxBuffer;
 
   xQueueHandle i2s_event_queue;

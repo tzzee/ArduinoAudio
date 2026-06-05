@@ -40,7 +40,11 @@ I2SAudio::I2SAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t
         // .use_apll = false
       }),
       status(I2SAudioStop) {
-  txBuffer = new char[I2SAudio::getPayloadSize()];  // virtualではなく、自分を呼ぶ
+  // TX リングバッファ: getBufferCount() スロット分を確保
+  ringTxBuffer  = new char[getBufferCount() * I2SAudio::getPayloadSize()];
+  ringTxReadIdx  = 0;
+  ringTxWriteIdx = 0;
+  ringTxCount    = 0;
   rxBuffer = new char[I2SAudio::getPayloadSize()];  // virtualではなく、自分を呼ぶ
   initRtcPin(audioConfig.pinConfig.bck_io_num);
   initRtcPin(audioConfig.pinConfig.ws_io_num);
@@ -49,7 +53,7 @@ I2SAudio::I2SAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t
 
 I2SAudio::~I2SAudio() {
   I2SAudio::stop();  // virtualではなく、自分を呼ぶ
-  delete[] txBuffer;
+  delete[] ringTxBuffer;
   delete[] rxBuffer;
 }
 
@@ -63,9 +67,6 @@ void I2SAudio::begin() {
 
 void I2SAudio::start() {
   _start(I2SAudioStart);
-  if (((uint8_t)i2sConfig.mode & (uint8_t)I2S_MODE_TX) == (uint8_t)I2S_MODE_TX) {
-    txEmpty = getBufferCount();
-  }
   if (((uint8_t)i2sConfig.mode & (uint8_t)I2S_MODE_RX) == (uint8_t)I2S_MODE_RX) {
     rxFilled = getBufferCount();
   }
@@ -104,9 +105,7 @@ void I2SAudio::_start(I2SAudioStatus s) {
     } break;
   }
   ESP_ERROR_CHECK(i2s_start(audioConfig.port));
-  txDone = false;
   rxDone = false;
-  txEmpty = 0;
   rxFilled = 0;
   zero();
   status = s;
@@ -126,7 +125,10 @@ void I2SAudio::stop() {
 
 void I2SAudio::zero() {
   i2s_zero_dma_buffer(audioConfig.port);
-  txEmpty = getBufferCount();
+  // リングバッファをリセット（DMAをゼロクリアしたので未送信データは破棄）
+  ringTxCount    = 0;
+  ringTxReadIdx  = 0;
+  ringTxWriteIdx = 0;
 }
 
 bool I2SAudio::_recvQueue(i2s_event_type_t type) {
@@ -135,14 +137,7 @@ bool I2SAudio::_recvQueue(i2s_event_type_t type) {
       log_e("I2S: Error");
     } break;
     case I2S_EVENT_TX_DONE: {
-      // All buffers are empty. This means we have an underflow on our hands.
-      txEmpty = getBufferCount();
-#if 0
-      if(!txDone) {
-        memset(txBuffer, 0, I2SAudio::getPayloadSize());
-        txDone = true;
-      }
-#endif
+      // DMAバッファが1つ消費された。次のドレインをトリガーする。
       return true;
     } break;
     case I2S_EVENT_RX_DONE: {
@@ -161,7 +156,8 @@ bool I2SAudio::_eventQueue(TickType_t ticks_to_wait) {
   i2s_event_t event;
   log_v("%d", uxQueueMessagesWaiting(i2s_event_queue));
 
-  if(txEmpty || rxFilled) {
+  // リングにデータがあれば即ドレイン（イベント待ち不要）
+  if(ringTxCount > 0 || rxFilled) {
     ticks_to_wait = 0;
   }
   const std::uint32_t elapsedMsec = startMsec - lastMsec;
@@ -169,39 +165,37 @@ bool I2SAudio::_eventQueue(TickType_t ticks_to_wait) {
     bool done = false;
     done |= _recvQueue(event.type);
     while (xQueueReceive(i2s_event_queue, &event, 0) == pdTRUE) {
-      // recv all queue
       done |= _recvQueue(event.type);
     }
     if(done) lastMsec = millis();
   } else if((std::uint32_t)getBufferMsec()*getBufferCount()<=elapsedMsec){
-    // must be empty
     log_w("i2s: event timeout");
-    if (((uint8_t)i2sConfig.mode & (uint8_t)I2S_MODE_TX) == (uint8_t)I2S_MODE_TX) {
-      txEmpty = getBufferCount();
-    }
     if (((uint8_t)i2sConfig.mode & (uint8_t)I2S_MODE_RX) == (uint8_t)I2S_MODE_RX) {
       rxFilled = getBufferCount();
     }
     lastMsec = millis();
   }
 
-  // write
-  if(txEmpty && txDone) {
-#ifdef I2S_LEGACY_API_ENABLED
-    int bytesWritten = i2s_write_bytes(audioConfig.port, (const char *)txBuffer, I2SAudio::getPayloadSize(), ticks_to_wait);
-#else
+  // TX: リングバッファから DMA へ可能な限りドレイン
+  while (ringTxCount > 0) {
     std::size_t bytesWritten = 0;
-    esp_err_t ret = i2s_write(audioConfig.port, (const char *)txBuffer, I2SAudio::getPayloadSize(), &bytesWritten, ticks_to_wait);
-    if (ret != ESP_OK) {
-      bytesWritten = 0;
-    }
+#ifdef I2S_LEGACY_API_ENABLED
+    int bw = i2s_write_bytes(audioConfig.port,
+      ringTxBuffer + ringTxReadIdx * I2SAudio::getPayloadSize(),
+      I2SAudio::getPayloadSize(), 0);
+    bytesWritten = (bw > 0) ? (std::size_t)bw : 0;
+#else
+    esp_err_t ret = i2s_write(audioConfig.port,
+      ringTxBuffer + ringTxReadIdx * I2SAudio::getPayloadSize(),
+      I2SAudio::getPayloadSize(), &bytesWritten, 0);
+    if (ret != ESP_OK) bytesWritten = 0;
 #endif
     if (I2SAudio::getPayloadSize() <= bytesWritten) {
-      txEmpty--;
-      txDone = false;
+      ringTxReadIdx = (ringTxReadIdx + 1) % getBufferCount();
+      ringTxCount--;
       lastMsec = millis();
     } else {
-      txEmpty = 0;
+      break;  // DMA が満杯なので次回へ
     }
   }
 
@@ -244,9 +238,11 @@ size_t I2SAudio::read(std::uint8_t* buffer, std::size_t length) {
 
 size_t I2SAudio::write(const std::uint8_t* buffer, std::size_t length) {
   size_t s = 0;
-  if (length <= I2SAudio::getPayloadSize()) {
-    memcpy(txBuffer, buffer, I2SAudio::getPayloadSize());
-    txDone = true;
+  if (length <= I2SAudio::getPayloadSize() && ringTxCount < getBufferCount()) {
+    memcpy(ringTxBuffer + ringTxWriteIdx * I2SAudio::getPayloadSize(),
+           buffer, I2SAudio::getPayloadSize());
+    ringTxWriteIdx = (ringTxWriteIdx + 1) % getBufferCount();
+    ringTxCount++;
     s = I2SAudio::getPayloadSize();
   }
   _eventQueue(0);
@@ -258,7 +254,7 @@ int I2SAudio::availableForWrite() {
     return 0;
   }
   _eventQueue(0);
-  return txEmpty ? I2SAudio::getPayloadSize() : 0;
+  return (ringTxCount < getBufferCount()) ? I2SAudio::getPayloadSize() : 0;
 }
 
 int I2SAudio::available() { /*ForRead*/
@@ -271,16 +267,15 @@ int I2SAudio::available() { /*ForRead*/
 
 bool I2SAudio::waitForWritable(std::uint32_t maxWaitMsec) {
   if(status != I2SAudioStart) {
-    delay(1000);
-    return false;
+    return false;  // 起動前は即リターン（delay不要）
   }
-  _eventQueue((TickType_t)maxWaitMsec);
-  return txEmpty;
+  if(ringTxCount < getBufferCount()) return true;  // リングに空きあり
+  _eventQueue((TickType_t)maxWaitMsec);  // リングが満杯ならDMAドレインを待つ
+  return ringTxCount < getBufferCount();
 }
 
 bool I2SAudio::waitForReadable(std::uint32_t maxWaitMsec) {
   if(status != I2SAudioStart) {
-    delay(1000);
     return false;
   }
   _eventQueue((TickType_t)maxWaitMsec);
