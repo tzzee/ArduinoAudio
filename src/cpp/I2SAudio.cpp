@@ -7,6 +7,12 @@
 #include <driver/rtc_io.h>
 #include <string.h>
 
+#define ARDUINO_AUDIO_SPIRAM_ENABLED
+
+#ifdef ARDUINO_AUDIO_SPIRAM_ENABLED
+#include <esp_heap_caps.h>
+#endif
+
 #include <Arduino.h>
 
 static void initRtcPin(int pin) {
@@ -40,12 +46,26 @@ I2SAudio::I2SAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t
         // .use_apll = false
       }),
       status(I2SAudioStop) {
-  // TX リングバッファ: getBufferCount() スロット分を確保
-  ringTxBuffer  = new char[getBufferCount() * I2SAudio::getPayloadSize()];
+  // TX リングバッファ: SPIRAM 優先確保（内部 RAM 圧迫を避ける）
+  const std::size_t ringSize = getBufferCount() * I2SAudio::getPayloadSize();
+#ifdef ARDUINO_AUDIO_SPIRAM_ENABLED
+  ringTxBuffer = (char*)heap_caps_malloc(ringSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#endif
+  if (!ringTxBuffer) {
+    log_e("I2SAudio: SPIRAM unavailable, fallback to internal RAM for ring buffer");
+    ringTxBuffer = new char[ringSize];
+  }
   ringTxReadIdx  = 0;
   ringTxWriteIdx = 0;
   ringTxCount    = 0;
-  rxBuffer = new char[I2SAudio::getPayloadSize()];  // virtualではなく、自分を呼ぶ
+  const std::size_t rxSize = I2SAudio::getPayloadSize();  // virtualではなく、自分を呼ぶ
+#ifdef ARDUINO_AUDIO_SPIRAM_ENABLED
+  rxBuffer = (char*)heap_caps_malloc(rxSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#endif
+  if (!rxBuffer) {
+    log_e("I2SAudio: SPIRAM unavailable, fallback to internal RAM for rx buffer");
+    rxBuffer = new char[rxSize];
+  }
   initRtcPin(audioConfig.pinConfig.bck_io_num);
   initRtcPin(audioConfig.pinConfig.ws_io_num);
   initRtcPin(audioConfig.pinConfig.data_out_num);
@@ -53,8 +73,8 @@ I2SAudio::I2SAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t
 
 I2SAudio::~I2SAudio() {
   I2SAudio::stop();  // virtualではなく、自分を呼ぶ
-  delete[] ringTxBuffer;
-  delete[] rxBuffer;
+  heap_caps_free(ringTxBuffer);
+  heap_caps_free(rxBuffer);
 }
 
 std::uint8_t I2SAudio::getBufferCount() const {
