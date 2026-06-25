@@ -79,6 +79,7 @@ class I2SAudio: public AudioImpl{
   int ringTxReadIdx;
   int ringTxWriteIdx;
   int ringTxCount;       ///< 現在リングにあるバッファ数
+  bool txPrimed;         ///< true の間だけリングから DMA へドレインする
 
   std::size_t rxFilled;
   bool rxDone;

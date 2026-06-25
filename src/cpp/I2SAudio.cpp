@@ -50,6 +50,7 @@ I2SAudio::I2SAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t
   ringTxReadIdx  = 0;
   ringTxWriteIdx = 0;
   ringTxCount    = 0;
+  txPrimed       = false;
   rxBuffer = nullptr;  // virtualではなく、自分を呼ぶ。begin()でPSRAM初期化後に確保する
   initRtcPin(audioConfig.pinConfig.bck_io_num);
   initRtcPin(audioConfig.pinConfig.ws_io_num);
@@ -156,6 +157,7 @@ void I2SAudio::zero() {
   ringTxCount    = 0;
   ringTxReadIdx  = 0;
   ringTxWriteIdx = 0;
+  txPrimed       = false;
 }
 
 bool I2SAudio::_recvQueue(i2s_event_type_t type) {
@@ -203,8 +205,8 @@ bool I2SAudio::_eventQueue(TickType_t ticks_to_wait) {
     lastMsec = millis();
   }
 
-  // TX: リングバッファから DMA へ可能な限りドレイン
-  while (ringTxCount > 0) {
+  // TX: 一定量プリフィル後にリングバッファから DMA へドレイン
+  while (txPrimed && ringTxCount > 0) {
     std::size_t bytesWritten = 0;
 #ifdef I2S_LEGACY_API_ENABLED
     int bw = i2s_write_bytes(audioConfig.port,
@@ -220,6 +222,11 @@ bool I2SAudio::_eventQueue(TickType_t ticks_to_wait) {
     if (I2SAudio::getPayloadSize() <= bytesWritten) {
       ringTxReadIdx = (ringTxReadIdx + 1) % getBufferCount();
       ringTxCount--;
+      if (ringTxCount == 0) {
+        // キューを使い切ったら DMA 側を無音で埋め直し、次回 write 群で再度プリフィルしてから再開する
+        txPrimed = false;
+        zero();
+      }
       lastMsec = millis();
     } else {
       break;  // DMA が満杯なので次回へ
@@ -270,6 +277,9 @@ size_t I2SAudio::write(const std::uint8_t* buffer, std::size_t length) {
            buffer, I2SAudio::getPayloadSize());
     ringTxWriteIdx = (ringTxWriteIdx + 1) % getBufferCount();
     ringTxCount++;
+    if (!txPrimed && ringTxCount >= getBufferCount()) {
+      txPrimed = true;
+    }
     s = I2SAudio::getPayloadSize();
   }
   _eventQueue(0);
@@ -281,7 +291,7 @@ int I2SAudio::availableForWrite() {
     return 0;
   }
   _eventQueue(0);
-  return (ringTxCount < getBufferCount()) ? I2SAudio::getPayloadSize() : 0;
+  return (getBufferCount() - ringTxCount) * I2SAudio::getPayloadSize();
 }
 
 int I2SAudio::available() { /*ForRead*/
