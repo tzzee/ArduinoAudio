@@ -23,10 +23,20 @@ class Esp32BuiltinDacAudio : public I2SAudio {
   } dacStatus = DacStopped;
   const i2s_dac_mode_t dac_mode;
   const std::uint16_t dcCutOffFrequency;
-  std::int16_t* highPassFilterArray;
+  float dcBlockPrevInput = 0.0f;
+  float dcBlockPrevOutput = 0.0f;
 
   /**
    * @brief ESP32内蔵DAC用I2S出力を初期化する
+   * @param [in] sampleRate サンプリング周波数。
+   * @param [in] bitDepth 実ビット深度。
+   * @param [in] alignedBitLength アライン後のビット長。
+   * @param [in] bufferMsec DMA 1 本あたりの時間長。
+   * @param [in] bufferCount DMA バッファ本数。
+   * @param [in] dac_mode DAC 出力チャンネル設定。
+   * @param [in] dcCutOffFrequency 低域カット設定。
+   * @param [in] config I2S ポート設定。
+   * @param [in] ringBufferCount ソフトウェア TX リング本数。0 のときは bufferCount を使う。
    */
   Esp32BuiltinDacAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t alignedBitLength, std::uint16_t bufferMsec,
     uint8_t bufferCount, i2s_dac_mode_t dac_mode = I2S_DAC_CHANNEL_RIGHT_EN, std::uint16_t dcCutOffFrequency = 0 /*0以上で有効、指定周波数以下をINT16_MINに貼り付け、スピーカーへ電圧がかかり続けるのを防止する*/,
@@ -38,7 +48,8 @@ class Esp32BuiltinDacAudio : public I2SAudio {
         .data_out_num = -1,
         .data_in_num = -1
       }
-    });
+    },
+    uint8_t ringBufferCount = 0);
 
   /**
    * @brief デストラクタ
@@ -61,7 +72,15 @@ class Esp32BuiltinDacAudio : public I2SAudio {
    */
   virtual void stop() override;
 
+  /**
+   * @brief DAC 状態に応じた無音データを書き込む
+   */
   virtual void zero() override;
+
+  /**
+   * @brief 再生中に TX が空になったときの無音 payload を DMA へ直接補充する
+   */
+  void handleTxIdle() override;
   
   void fill(int16_t v);
 

@@ -31,7 +31,7 @@ static void deinitRtcPin(int pin) {
 }
 
 I2SAudio::I2SAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t alignedBitLength, std::uint16_t bufferMsec, std::uint8_t channelNum,
-    uint8_t bufferCount, const I2SAudioConfig& audioConfig)
+    uint8_t bufferCount, const I2SAudioConfig& audioConfig, std::uint8_t ringBufferCount)
     : super(sampleRate, bitDepth, alignedBitLength, bufferMsec, channelNum),
       audioConfig(audioConfig),
       i2sConfig({
@@ -43,14 +43,18 @@ I2SAudio::I2SAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
         .dma_buf_count = bufferCount,
         .dma_buf_len = (int)getBufferLength() ,
+        .tx_desc_auto_clear = audioConfig.txDescAutoClear,
         // .use_apll = false
       }),
+      ringBufferCount(ringBufferCount ? ringBufferCount : bufferCount),
       status(I2SAudioStop) {
   ringTxBuffer   = nullptr;
   ringTxReadIdx  = 0;
   ringTxWriteIdx = 0;
   ringTxCount    = 0;
   txPrimed       = false;
+  handlingTxIdle = false;
+  txIdleFilled   = false;
   rxBuffer = nullptr;  // virtualではなく、自分を呼ぶ。begin()でPSRAM初期化後に確保する
   initRtcPin(audioConfig.pinConfig.bck_io_num);
   initRtcPin(audioConfig.pinConfig.ws_io_num);
@@ -72,9 +76,13 @@ std::uint8_t I2SAudio::getBufferCount() const {
   return i2sConfig.dma_buf_count;
 }
 
+std::uint8_t I2SAudio::getRingBufferCount() const {
+  return ringBufferCount;
+}
+
 void I2SAudio::begin() {
   // PSRAM 初期化後に呼ばれるため、ここで SPIRAM 優先確保する
-  const std::size_t ringSize = getBufferCount() * I2SAudio::getPayloadSize();
+  const std::size_t ringSize = getRingBufferCount() * I2SAudio::getPayloadSize();
 #ifdef ARDUINO_AUDIO_SPIRAM_ENABLED
   ringTxBuffer = (char*)heap_caps_malloc(ringSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #endif
@@ -158,6 +166,46 @@ void I2SAudio::zero() {
   ringTxReadIdx  = 0;
   ringTxWriteIdx = 0;
   txPrimed       = false;
+  txIdleFilled   = false;
+}
+
+void I2SAudio::handleTxIdle() {
+}
+
+void I2SAudio::zeroTxDmaBuffer() {
+  i2s_zero_dma_buffer(audioConfig.port);
+}
+
+bool I2SAudio::writeTxDmaBuffer(const std::uint8_t* payload, std::size_t length, std::uint8_t repeatCount) {
+  if (!payload || length == 0) {
+    return false;
+  }
+  for (std::uint8_t i = 0; i < repeatCount; i++) {
+    std::size_t bytesWritten = 0;
+#ifdef I2S_LEGACY_API_ENABLED
+    int bw = i2s_write_bytes(audioConfig.port, reinterpret_cast<const char*>(payload), length, 0);
+    bytesWritten = (bw > 0) ? (std::size_t)bw : 0;
+#else
+    esp_err_t ret = i2s_write(audioConfig.port, payload, length, &bytesWritten, 0);
+    if (ret != ESP_OK) {
+      bytesWritten = 0;
+    }
+#endif
+    if (bytesWritten < length) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void I2SAudio::flush() {
+  if (status != I2SAudioStart) {
+    return;
+  }
+  if (!txPrimed && ringTxCount > 0) {
+    txPrimed = true;
+  }
+  _eventQueue(0);
 }
 
 bool I2SAudio::_recvQueue(i2s_event_type_t type) {
@@ -220,12 +268,16 @@ bool I2SAudio::_eventQueue(TickType_t ticks_to_wait) {
     if (ret != ESP_OK) bytesWritten = 0;
 #endif
     if (I2SAudio::getPayloadSize() <= bytesWritten) {
-      ringTxReadIdx = (ringTxReadIdx + 1) % getBufferCount();
+      ringTxReadIdx = (ringTxReadIdx + 1) % getRingBufferCount();
       ringTxCount--;
       if (ringTxCount == 0) {
-        // キューを使い切ったら DMA 側を無音で埋め直し、次回 write 群で再度プリフィルしてから再開する
         txPrimed = false;
-        zero();
+        if (!audioConfig.txDescAutoClear && !txIdleFilled && !handlingTxIdle && status != I2SAudioStop) {
+          handlingTxIdle = true;
+          handleTxIdle();
+          handlingTxIdle = false;
+          txIdleFilled = true;
+        }
       }
       lastMsec = millis();
     } else {
@@ -272,12 +324,13 @@ size_t I2SAudio::read(std::uint8_t* buffer, std::size_t length) {
 
 size_t I2SAudio::write(const std::uint8_t* buffer, std::size_t length) {
   size_t s = 0;
-  if (length <= I2SAudio::getPayloadSize() && ringTxCount < getBufferCount()) {
+  if (length <= I2SAudio::getPayloadSize() && ringTxCount < getRingBufferCount()) {
     memcpy(ringTxBuffer + ringTxWriteIdx * I2SAudio::getPayloadSize(),
            buffer, I2SAudio::getPayloadSize());
-    ringTxWriteIdx = (ringTxWriteIdx + 1) % getBufferCount();
+    ringTxWriteIdx = (ringTxWriteIdx + 1) % getRingBufferCount();
     ringTxCount++;
-    if (!txPrimed && ringTxCount >= getBufferCount()) {
+    txIdleFilled = false;
+    if (!txPrimed && ringTxCount >= getRingBufferCount()) {
       txPrimed = true;
     }
     s = I2SAudio::getPayloadSize();
@@ -291,7 +344,7 @@ int I2SAudio::availableForWrite() {
     return 0;
   }
   _eventQueue(0);
-  return (getBufferCount() - ringTxCount) * I2SAudio::getPayloadSize();
+  return (getRingBufferCount() - ringTxCount) * I2SAudio::getPayloadSize();
 }
 
 int I2SAudio::available() { /*ForRead*/
@@ -306,9 +359,9 @@ bool I2SAudio::waitForWritable(std::uint32_t maxWaitMsec) {
   if(status != I2SAudioStart) {
     return false;  // 起動前は即リターン（delay不要）
   }
-  if(ringTxCount < getBufferCount()) return true;  // リングに空きあり
+  if(ringTxCount < getRingBufferCount()) return true;  // リングに空きあり
   _eventQueue((TickType_t)maxWaitMsec);  // リングが満杯ならDMAドレインを待つ
-  return ringTxCount < getBufferCount();
+  return ringTxCount < getRingBufferCount();
 }
 
 bool I2SAudio::waitForReadable(std::uint32_t maxWaitMsec) {

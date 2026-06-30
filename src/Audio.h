@@ -14,6 +14,12 @@ class Audio {
   virtual void start() = 0;
   virtual void stop() = 0;
   virtual void zero() = 0;
+  /**
+   * @brief バッファリング済みのデータ送出を明示的に開始する
+   *
+   * デフォルト実装は no-op。必要な実装だけ override する。
+   */
+  virtual void flush() {}
   virtual int availableForWrite() = 0;
   virtual int available() = 0;
 
