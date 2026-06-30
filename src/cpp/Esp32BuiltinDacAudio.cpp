@@ -110,13 +110,13 @@ void Esp32BuiltinDacAudio::zero() {
   }
 }
 
-void Esp32BuiltinDacAudio::handleTxIdle() {
+bool Esp32BuiltinDacAudio::handleTxIdle() {
   if (dcCutOffFrequency == 0 || dacStatus != DacRunning) {
-    return;
+    return false;
   }
   uint8_t tmp[super::getPayloadSize()];
   memset(tmp, 0, sizeof(tmp));
-  writeTxDmaBuffer(tmp, sizeof(tmp), getBufferCount());
+  return writeTxDmaBuffer(tmp, sizeof(tmp), getBufferCount());
 }
 
 void Esp32BuiltinDacAudio::fill(int16_t v) {

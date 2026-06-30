@@ -81,7 +81,7 @@ class I2SAudio: public AudioImpl{
   /**
    * @brief TX リングが空になった直後に DMA へ low-level な無音データを書き込む
    */
-  virtual void handleTxIdle();
+  virtual bool handleTxIdle();
 
   /**
    * @brief DMA バッファを low-level にゼロクリアする

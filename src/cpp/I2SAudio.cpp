@@ -169,7 +169,8 @@ void I2SAudio::zero() {
   txIdleFilled   = false;
 }
 
-void I2SAudio::handleTxIdle() {
+bool I2SAudio::handleTxIdle() {
+  return false;
 }
 
 void I2SAudio::zeroTxDmaBuffer() {
@@ -274,9 +275,8 @@ bool I2SAudio::_eventQueue(TickType_t ticks_to_wait) {
         txPrimed = false;
         if (!audioConfig.txDescAutoClear && !txIdleFilled && !handlingTxIdle && status != I2SAudioStop) {
           handlingTxIdle = true;
-          handleTxIdle();
+          txIdleFilled = handleTxIdle();
           handlingTxIdle = false;
-          txIdleFilled = true;
         }
       }
       lastMsec = millis();
