@@ -55,6 +55,7 @@ I2SAudio::I2SAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t
   txPrimed       = false;
   handlingTxIdle = false;
   txIdleFilled   = false;
+  txIdleRequested = false;
   rxBuffer = nullptr;  // virtualではなく、自分を呼ぶ。begin()でPSRAM初期化後に確保する
   initRtcPin(audioConfig.pinConfig.bck_io_num);
   initRtcPin(audioConfig.pinConfig.ws_io_num);
@@ -143,8 +144,14 @@ void I2SAudio::_start(I2SAudioStatus s) {
   ESP_ERROR_CHECK(i2s_start(audioConfig.port));
   rxDone = false;
   rxFilled = 0;
-  zero();
+  ringTxCount = 0;
+  ringTxReadIdx = 0;
+  ringTxWriteIdx = 0;
+  txPrimed = false;
+  txIdleFilled = false;
+  txIdleRequested = false;
   status = s;
+  handleTxIdle();
 }
 
 //  stop DAC
@@ -167,6 +174,7 @@ void I2SAudio::zero() {
   ringTxWriteIdx = 0;
   txPrimed       = false;
   txIdleFilled   = false;
+  txIdleRequested = false;
 }
 
 bool I2SAudio::handleTxIdle() {
@@ -177,17 +185,17 @@ void I2SAudio::zeroTxDmaBuffer() {
   i2s_zero_dma_buffer(audioConfig.port);
 }
 
-bool I2SAudio::writeTxDmaBuffer(const std::uint8_t* payload, std::size_t length, std::uint8_t repeatCount) {
+bool I2SAudio::writeTxDmaBuffer(const std::uint8_t* payload, std::size_t length, std::uint8_t repeatCount, TickType_t ticks_to_wait) {
   if (!payload || length == 0) {
     return false;
   }
   for (std::uint8_t i = 0; i < repeatCount; i++) {
     std::size_t bytesWritten = 0;
 #ifdef I2S_LEGACY_API_ENABLED
-    int bw = i2s_write_bytes(audioConfig.port, reinterpret_cast<const char*>(payload), length, 0);
+    int bw = i2s_write_bytes(audioConfig.port, reinterpret_cast<const char*>(payload), length, ticks_to_wait);
     bytesWritten = (bw > 0) ? (std::size_t)bw : 0;
 #else
-    esp_err_t ret = i2s_write(audioConfig.port, payload, length, &bytesWritten, 0);
+    esp_err_t ret = i2s_write(audioConfig.port, payload, length, &bytesWritten, ticks_to_wait);
     if (ret != ESP_OK) {
       bytesWritten = 0;
     }
@@ -207,6 +215,21 @@ void I2SAudio::flush() {
     txPrimed = true;
   }
   _eventQueue(0);
+}
+
+bool I2SAudio::purge() {
+  if (status == I2SAudioStop || handlingTxIdle) {
+    return false;
+  }
+
+  ringTxCount = 0;
+  ringTxReadIdx = 0;
+  ringTxWriteIdx = 0;
+  txPrimed = false;
+  txIdleFilled = false;
+  txIdleRequested = true;
+  _eventQueue(0);
+  return true;
 }
 
 bool I2SAudio::_recvQueue(i2s_event_type_t type) {
@@ -232,6 +255,7 @@ bool I2SAudio::_eventQueue(TickType_t ticks_to_wait) {
   const std::uint32_t startMsec = millis();
   static std::uint32_t lastMsec = millis();
   i2s_event_t event;
+  bool tx_done_received = false;
   log_v("%d", uxQueueMessagesWaiting(i2s_event_queue));
 
   // リングにデータがあれば即ドレイン（イベント待ち不要）
@@ -241,8 +265,10 @@ bool I2SAudio::_eventQueue(TickType_t ticks_to_wait) {
   const std::uint32_t elapsedMsec = startMsec - lastMsec;
   if (xQueueReceive(i2s_event_queue, &event, std::min((TickType_t)getBufferMsec()*getBufferCount(), ticks_to_wait)) == pdTRUE) {
     bool done = false;
+    tx_done_received |= event.type == I2S_EVENT_TX_DONE;
     done |= _recvQueue(event.type);
     while (xQueueReceive(i2s_event_queue, &event, 0) == pdTRUE) {
+      tx_done_received |= event.type == I2S_EVENT_TX_DONE;
       done |= _recvQueue(event.type);
     }
     if(done) lastMsec = millis();
@@ -273,7 +299,7 @@ bool I2SAudio::_eventQueue(TickType_t ticks_to_wait) {
       ringTxCount--;
       if (ringTxCount == 0) {
         txPrimed = false;
-        if (!audioConfig.txDescAutoClear && !txIdleFilled && !handlingTxIdle && status != I2SAudioStop) {
+        if (!txIdleFilled && !handlingTxIdle && status != I2SAudioStop) {
           handlingTxIdle = true;
           txIdleFilled = handleTxIdle();
           handlingTxIdle = false;
@@ -282,6 +308,15 @@ bool I2SAudio::_eventQueue(TickType_t ticks_to_wait) {
       lastMsec = millis();
     } else {
       break;  // DMA が満杯なので次回へ
+    }
+  }
+
+  if (tx_done_received && ringTxCount == 0 && txIdleRequested && !txIdleFilled && !handlingTxIdle && status != I2SAudioStop) {
+    handlingTxIdle = true;
+    txIdleFilled = handleTxIdle();
+    handlingTxIdle = false;
+    if (txIdleFilled) {
+      txIdleRequested = false;
     }
   }
 

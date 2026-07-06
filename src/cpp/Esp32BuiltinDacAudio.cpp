@@ -39,7 +39,7 @@ Esp32BuiltinDacAudio::Esp32BuiltinDacAudio(std::uint16_t sampleRate, std::uint8_
       .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_DAC_BUILT_IN),
       .chFormat = I2S_CHANNEL_FMT_RIGHT_LEFT,
       .comFormat = builtin_dac_comm_format,
-      .txDescAutoClear = dcCutOffFrequency == 0,
+      .txDescAutoClear = false,
       .pinConfig = config.pinConfig
     }, ringBufferCount), dac_mode(dac_mode), dcCutOffFrequency(dcCutOffFrequency) {
 }
@@ -58,11 +58,16 @@ void Esp32BuiltinDacAudio::start() {
   dcBlockPrevInput = 0.0f;
   dcBlockPrevOutput = 0.0f;
   super::start(); // 中でzeroが呼ばれる
-  // i2s_set_dac_mode(dac_mode);
-  dacStatus = DacStarting;
-  zero();  // DACの出力を0から中立にする
-  dacStatus = DacRunning;
-  zero();  // DACの出力を中立にする
+  if (dcCutOffFrequency != 0) {
+    // i2s_set_dac_mode(dac_mode);
+    dacStatus = DacStarting;
+    zero();  // DACの出力を0から中立にする
+    dacStatus = DacRunning;
+    zero();  // DACの出力を中立にする
+  } else {
+    dacStatus = DacRunning;
+    zero();  // DACの出力を中立にする
+  }
 }
 
 //  stop DAC
@@ -90,6 +95,7 @@ void Esp32BuiltinDacAudio::zero() {
       waitForWritable();
       write(reinterpret_cast<const uint8_t*>(tmp), getPayloadSize());
     }
+    flush();
   } break;
   case DacRunning: {
     fill(0);
@@ -111,12 +117,27 @@ void Esp32BuiltinDacAudio::zero() {
 }
 
 bool Esp32BuiltinDacAudio::handleTxIdle() {
-  if (dcCutOffFrequency == 0 || dacStatus != DacRunning) {
+  const TickType_t tx_ticks_to_wait = pdMS_TO_TICKS(getBufferMsec() * getBufferCount());
+  if (dacStatus != DacRunning) {
+    log_d("handleTxIdle skip status=%d", dacStatus);
     return false;
+  } else if (dcCutOffFrequency == 0) {
+    uint8_t tmp[super::getPayloadSize()];
+    uint16_t *t = reinterpret_cast<uint16_t*>(tmp);
+    for (size_t i = 0; i < getBufferLength(); i++) {
+      t[i * CH_NUM + channelIndexRL] = (dac_mode & I2S_DAC_CHANNEL_RIGHT_EN) ? 0x8000U : 0;
+      t[i * CH_NUM + (1 - channelIndexRL)] = (dac_mode & I2S_DAC_CHANNEL_LEFT_EN) ? 0x8000U : 0;
+    }
+    const bool wrote = writeTxDmaBuffer(tmp, sizeof(tmp), getBufferCount(), tx_ticks_to_wait);
+    log_d("handleTxIdle midpoint wrote=%d", wrote);
+    return wrote;
+  } else {
+    uint8_t tmp[super::getPayloadSize()];
+    memset(tmp, 0, sizeof(tmp));
+    const bool wrote = writeTxDmaBuffer(tmp, sizeof(tmp), getBufferCount(), tx_ticks_to_wait);
+    log_d("handleTxIdle zero wrote=%d", wrote);
+    return wrote;
   }
-  uint8_t tmp[super::getPayloadSize()];
-  memset(tmp, 0, sizeof(tmp));
-  return writeTxDmaBuffer(tmp, sizeof(tmp), getBufferCount());
 }
 
 void Esp32BuiltinDacAudio::fill(int16_t v) {
@@ -129,6 +150,7 @@ void Esp32BuiltinDacAudio::fill(int16_t v) {
     waitForWritable();
     write(reinterpret_cast<const uint8_t*>(tmp), getPayloadSize());
   }
+  flush();
 }
 
 std::size_t const Esp32BuiltinDacAudio::getPayloadSize() const {

@@ -48,6 +48,15 @@ class I2SAudio: public AudioImpl{
   virtual void flush() override;
 
   /**
+   * @brief TX リングを破棄し、idle 用の無音 payload への遷移を要求する。
+   * @details 未送信の TX データを破棄した上で、`_eventQueue()` に
+   * `handleTxIdle()` 実行を依頼する。
+   * @retval true idle 遷移要求を受理
+   * @retval false 要求不要または要求不可
+   */
+  bool purge();
+
+  /**
    * @brief バッファを読み込み、音声を受け取る
    * @param [out] buf 録音データを保持するバッファ。
    * @param [in] size 録音データ長。
@@ -93,9 +102,10 @@ class I2SAudio: public AudioImpl{
    * @param [in] payload I2S 送信用 payload。
    * @param [in] length payload 長。
    * @param [in] repeatCount 同じ payload を繰り返す回数。
+   * @param [in] ticks_to_wait DMA 空き待ち tick。
    * @return すべて書き込めたとき true。
    */
-  bool writeTxDmaBuffer(const std::uint8_t* payload, std::size_t length, std::uint8_t repeatCount = 1);
+  bool writeTxDmaBuffer(const std::uint8_t* payload, std::size_t length, std::uint8_t repeatCount = 1, TickType_t ticks_to_wait = 0);
   
  private:
   
@@ -118,6 +128,7 @@ class I2SAudio: public AudioImpl{
   bool txPrimed;         ///< true の間だけリングから DMA へドレインする
   bool handlingTxIdle;
   bool txIdleFilled;
+  bool txIdleRequested;
 
   std::size_t rxFilled;
   bool rxDone;
