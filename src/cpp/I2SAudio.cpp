@@ -54,8 +54,7 @@ I2SAudio::I2SAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t
   ringTxCount    = 0;
   txPrimed       = false;
   handlingTxIdle = false;
-  txIdleFilled   = false;
-  txIdleRequested = false;
+  txIdlePendingCount = 0;
   rxBuffer = nullptr;  // virtualではなく、自分を呼ぶ。begin()でPSRAM初期化後に確保する
   initRtcPin(audioConfig.pinConfig.bck_io_num);
   initRtcPin(audioConfig.pinConfig.ws_io_num);
@@ -148,10 +147,13 @@ void I2SAudio::_start(I2SAudioStatus s) {
   ringTxReadIdx = 0;
   ringTxWriteIdx = 0;
   txPrimed = false;
-  txIdleFilled = false;
-  txIdleRequested = false;
+  txIdlePendingCount = 0;
   status = s;
-  handleTxIdle();
+  if (handleTxIdle()) {
+    txIdlePendingCount = getBufferCount() - 1;
+  } else {
+    txIdlePendingCount = getBufferCount();
+  }
 }
 
 //  stop DAC
@@ -173,8 +175,7 @@ void I2SAudio::zero() {
   ringTxReadIdx  = 0;
   ringTxWriteIdx = 0;
   txPrimed       = false;
-  txIdleFilled   = false;
-  txIdleRequested = false;
+  txIdlePendingCount = 0;
 }
 
 bool I2SAudio::handleTxIdle() {
@@ -226,8 +227,7 @@ bool I2SAudio::purge() {
   ringTxReadIdx = 0;
   ringTxWriteIdx = 0;
   txPrimed = false;
-  txIdleFilled = false;
-  txIdleRequested = true;
+  txIdlePendingCount = getBufferCount();
   _eventQueue(0);
   return true;
 }
@@ -299,9 +299,14 @@ bool I2SAudio::_eventQueue(TickType_t ticks_to_wait) {
       ringTxCount--;
       if (ringTxCount == 0) {
         txPrimed = false;
-        if (!txIdleFilled && !handlingTxIdle && status != I2SAudioStop) {
+        if (txIdlePendingCount == 0 && !handlingTxIdle && status != I2SAudioStop) {
+          txIdlePendingCount = getBufferCount();
+        }
+        if (txIdlePendingCount > 0 && !handlingTxIdle && status != I2SAudioStop) {
           handlingTxIdle = true;
-          txIdleFilled = handleTxIdle();
+          if (handleTxIdle()) {
+            txIdlePendingCount--;
+          }
           handlingTxIdle = false;
         }
       }
@@ -311,13 +316,12 @@ bool I2SAudio::_eventQueue(TickType_t ticks_to_wait) {
     }
   }
 
-  if (tx_done_received && ringTxCount == 0 && txIdleRequested && !txIdleFilled && !handlingTxIdle && status != I2SAudioStop) {
+  if (tx_done_received && ringTxCount == 0 && txIdlePendingCount > 0 && !handlingTxIdle && status != I2SAudioStop) {
     handlingTxIdle = true;
-    txIdleFilled = handleTxIdle();
-    handlingTxIdle = false;
-    if (txIdleFilled) {
-      txIdleRequested = false;
+    if (handleTxIdle()) {
+      txIdlePendingCount--;
     }
+    handlingTxIdle = false;
   }
 
   // read
@@ -364,7 +368,7 @@ size_t I2SAudio::write(const std::uint8_t* buffer, std::size_t length) {
            buffer, I2SAudio::getPayloadSize());
     ringTxWriteIdx = (ringTxWriteIdx + 1) % getRingBufferCount();
     ringTxCount++;
-    txIdleFilled = false;
+    txIdlePendingCount = 0;
     if (!txPrimed && ringTxCount >= getRingBufferCount()) {
       txPrimed = true;
     }

@@ -108,7 +108,6 @@ class I2SAudio: public AudioImpl{
   bool writeTxDmaBuffer(const std::uint8_t* payload, std::size_t length, std::uint8_t repeatCount = 1, TickType_t ticks_to_wait = 0);
   
  private:
-  
   bool _eventQueue(TickType_t);
   bool _recvQueue(i2s_event_type_t type);
   std::uint8_t getRingBufferCount() const;
@@ -127,8 +126,7 @@ class I2SAudio: public AudioImpl{
   int ringTxCount;       ///< 現在リングにあるバッファ数
   bool txPrimed;         ///< true の間だけリングから DMA へドレインする
   bool handlingTxIdle;
-  bool txIdleFilled;
-  bool txIdleRequested;
+  std::uint8_t txIdlePendingCount;
 
   std::size_t rxFilled;
   bool rxDone;

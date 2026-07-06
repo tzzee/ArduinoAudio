@@ -128,14 +128,14 @@ bool Esp32BuiltinDacAudio::handleTxIdle() {
       t[i * CH_NUM + channelIndexRL] = (dac_mode & I2S_DAC_CHANNEL_RIGHT_EN) ? 0x8000U : 0;
       t[i * CH_NUM + (1 - channelIndexRL)] = (dac_mode & I2S_DAC_CHANNEL_LEFT_EN) ? 0x8000U : 0;
     }
-    const bool wrote = writeTxDmaBuffer(tmp, sizeof(tmp), getBufferCount(), tx_ticks_to_wait);
-    log_d("handleTxIdle midpoint wrote=%d", wrote);
+    const bool wrote = writeTxDmaBuffer(tmp, sizeof(tmp), 1, tx_ticks_to_wait);
+    log_v("handleTxIdle midpoint wrote=%d", wrote);
     return wrote;
   } else {
     uint8_t tmp[super::getPayloadSize()];
     memset(tmp, 0, sizeof(tmp));
-    const bool wrote = writeTxDmaBuffer(tmp, sizeof(tmp), getBufferCount(), tx_ticks_to_wait);
-    log_d("handleTxIdle zero wrote=%d", wrote);
+    const bool wrote = writeTxDmaBuffer(tmp, sizeof(tmp), 1, tx_ticks_to_wait);
+    log_v("handleTxIdle zero wrote=%d", wrote);
     return wrote;
   }
 }
