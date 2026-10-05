@@ -101,6 +101,15 @@ class I2SAudio: public AudioImpl{
   virtual std::uint8_t getTxIdlePayloadCount() const;
 
   /**
+   * @brief I2S のピンを設定する
+   * @details 既定は i2s_set_pin()。pin が NULL のときは内蔵 DAC の 2 チャンネル(GPIO25 と GPIO26)を両方有効にする。
+   * 片側の DAC だけを使う派生クラスは差し替える
+   * @param [in] pin ピン設定。NULL のときは内蔵 DAC
+   * @return i2s_set_pin() の結果
+   */
+  virtual esp_err_t setPin(const i2s_pin_config_t* pin);
+
+  /**
    * @brief DMA バッファを low-level にゼロクリアする
    */
   void zeroTxDmaBuffer();

@@ -37,7 +37,7 @@ class Esp32BuiltinDacAudio : public I2SAudio {
    * @param [in] alignedBitLength アライン後のビット長。
    * @param [in] bufferMsec DMA 1 本あたりの時間長。
    * @param [in] bufferCount DMA バッファ本数。
-   * @param [in] dac_mode DAC 出力チャンネル設定。
+   * @param [in] dac_mode DAC 出力チャンネル設定。片側だけのときはモノラル、両側のときはステレオで送る。
    * @param [in] dcCutOffFrequency 低域カット設定。
    * @param [in] config I2S ポート設定。
    * @param [in] ringBufferCount ソフトウェア TX リング本数。0 のときは bufferCount を使う。
@@ -92,11 +92,29 @@ class Esp32BuiltinDacAudio : public I2SAudio {
   bool handleTxIdle() override;
 
   /**
+   * @brief 1 サンプルを、DMA に送るバッファの決まった位置へ置く
+   * @details モノラルでは隣り合う 2 サンプルの前後を入れ替えて置く。ステレオでは使う側に置き、反対側は 0 にする
+   * @param [out] t DMA に送るバッファ(getBufferLength() サンプル × チャンネル数)
+   * @param [in] i サンプル番号
+   * @param [in] us unsigned 16bit のサンプル値(上位 8bit が DAC に出る)
+   */
+  void putSample(std::uint16_t* t, std::size_t i, std::uint16_t us) const;
+
+  /**
    * @brief TX が空になったあとに handleTxIdle() で書く payload の本数
    * @details dcCutOffFrequency 有効時は、中点から 0V へ下げる分を DMA 本数に足す
    * @return payload 本数
    */
   std::uint8_t getTxIdlePayloadCount() const override;
+
+  /**
+   * @brief I2S のピンを設定する
+   * @details モノラルで送るときは使う側の DAC だけを有効にする。モノラルでは左右に同じデータが出るため、
+   * i2s_set_pin(NULL) で両方を有効にすると反対側のピンにも音が出る。反対側のピンには触れない
+   * @param [in] pin ピン設定。NULL のときは内蔵 DAC
+   * @return 設定の結果
+   */
+  esp_err_t setPin(const i2s_pin_config_t* pin) override;
 
   /**
    * @brief dcCutOffFrequency 有効時に、1 サンプルあたりに直流を動かす量

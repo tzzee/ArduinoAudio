@@ -125,7 +125,9 @@ void I2SAudio::_start(I2SAudioStatus s) {
 #else
   const uint32_t bits_cfg = (uint32_t)i2sConfig.bits_per_sample;
 #endif
-  i2s_set_pin(audioConfig.port, hasPinConfig?&(audioConfig.pinConfig):NULL);
+  if (setPin(hasPinConfig ? &(audioConfig.pinConfig) : NULL) != ESP_OK) {
+    log_e("I2SAudio: setPin failed");
+  }
   i2s_channel_t clock_channel = I2S_CHANNEL_STEREO;
   switch (i2sConfig.channel_format) {
     case I2S_CHANNEL_FMT_RIGHT_LEFT:
@@ -184,6 +186,10 @@ bool I2SAudio::handleTxIdle() {
 
 std::uint8_t I2SAudio::getTxIdlePayloadCount() const {
   return getBufferCount();
+}
+
+esp_err_t I2SAudio::setPin(const i2s_pin_config_t* pin) {
+  return i2s_set_pin(audioConfig.port, pin);
 }
 
 void I2SAudio::zeroTxDmaBuffer() {
