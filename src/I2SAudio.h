@@ -93,6 +93,14 @@ class I2SAudio: public AudioImpl{
   virtual bool handleTxIdle();
 
   /**
+   * @brief TX リングが空になったあとに handleTxIdle() で書く payload の本数
+   * @details 既定は DMA 本数。DMA は同じ記述子を繰り返し送るため、最後の本数ぶんが
+   * すべて無音で埋まるまで書く必要がある。無音へ段階的に移る派生クラスは移行分を足す。
+   * @return payload 本数
+   */
+  virtual std::uint8_t getTxIdlePayloadCount() const;
+
+  /**
    * @brief DMA バッファを low-level にゼロクリアする
    */
   void zeroTxDmaBuffer();

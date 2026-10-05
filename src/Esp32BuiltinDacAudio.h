@@ -25,6 +25,10 @@ class Esp32BuiltinDacAudio : public I2SAudio {
   const std::uint16_t dcCutOffFrequency;
   float dcBlockPrevInput = 0.0f;
   float dcBlockPrevOutput = 0.0f;
+  /// dcCutOffFrequency 有効時に、出力へ足す直流(signed 16bit)。INT16_MIN で 0V、0 で中点
+  float dcOffset = INT16_MIN;
+  /// dcCutOffFrequency 有効時に、0V と中点の間を移るのにかける時間
+  static constexpr std::uint16_t kDcOffsetRampMsec = 100;
 
   /**
    * @brief ESP32内蔵DAC用I2S出力を初期化する
@@ -64,6 +68,8 @@ class Esp32BuiltinDacAudio : public I2SAudio {
 
   /**
    * @brief 音声出力の開始。以降writeを途切れさせないこと
+   * @details dcCutOffFrequency 有効時は 0V で待ち、write() で音を書き始めたときに
+   * kDcOffsetRampMsec かけて中点へ上げる。無音に戻るときは handleTxIdle() で同じ時間をかけて 0V へ下げる
    */
   virtual void start() override;
 
@@ -74,6 +80,8 @@ class Esp32BuiltinDacAudio : public I2SAudio {
 
   /**
    * @brief DAC 状態に応じた無音データを書き込む
+   * @details dcCutOffFrequency 有効時の DacRunning は中点で埋めず、purge() で
+   * 中点から 0V へ段階的に下げる無音への移行に任せる
    */
   virtual void zero() override;
 
@@ -82,6 +90,19 @@ class Esp32BuiltinDacAudio : public I2SAudio {
    * DC カット無効時は、内蔵 DAC の中点を維持するデータを送る。
    */
   bool handleTxIdle() override;
+
+  /**
+   * @brief TX が空になったあとに handleTxIdle() で書く payload の本数
+   * @details dcCutOffFrequency 有効時は、中点から 0V へ下げる分を DMA 本数に足す
+   * @return payload 本数
+   */
+  std::uint8_t getTxIdlePayloadCount() const override;
+
+  /**
+   * @brief dcCutOffFrequency 有効時に、1 サンプルあたりに直流を動かす量
+   * @return signed 16bit 単位の量
+   */
+  float getDcOffsetStep() const;
   
   void fill(int16_t v);
 

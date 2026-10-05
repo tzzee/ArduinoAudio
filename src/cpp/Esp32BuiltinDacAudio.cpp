@@ -57,14 +57,14 @@ void Esp32BuiltinDacAudio::begin() {
 void Esp32BuiltinDacAudio::start() {
   dcBlockPrevInput = 0.0f;
   dcBlockPrevOutput = 0.0f;
-  super::start(); // 中でzeroが呼ばれる
   if (dcCutOffFrequency != 0) {
-    // i2s_set_dac_mode(dac_mode);
-    dacStatus = DacStarting;
-    zero();  // DACの出力を0から中立にする
+    // 無音中は 0V で待つ。中点へは write() が音を書き始めたときに段階的に上げる。
+    // super::start() の中の handleTxIdle() で 0V を書かせるため、先に DacRunning にする
     dacStatus = DacRunning;
-    zero();  // DACの出力を中立にする
+    dcOffset = INT16_MIN;
+    super::start();
   } else {
+    super::start(); // 中でzeroが呼ばれる
     dacStatus = DacRunning;
     zero();  // DACの出力を中立にする
   }
@@ -98,7 +98,14 @@ void Esp32BuiltinDacAudio::zero() {
     flush();
   } break;
   case DacRunning: {
-    fill(0);
+    if (dcCutOffFrequency != 0) {
+      // 中点で埋めると 0V から跳ね上がってボツになる。無音への移行(中点から 0V へ段階的に下げる)に任せる
+      if (!purge()) {
+        log_d("zero: purge skipped");
+      }
+    } else {
+      fill(0);
+    }
   } break;
   case DacStopping: {
     for(size_t j = 0; j < getBufferCount(); j++) {
@@ -132,12 +139,44 @@ bool Esp32BuiltinDacAudio::handleTxIdle() {
     log_v("handleTxIdle midpoint wrote=%d", wrote);
     return wrote;
   } else {
+    // 中点から 0V へ段階的に下げ、下げ終えたあとは 0V を書く。
+    // 書けなかったときに次の呼び出しで同じ区間を書き直せるよう、書けてから dcOffset を進める
     uint8_t tmp[super::getPayloadSize()];
-    memset(tmp, 0, sizeof(tmp));
+    uint16_t *t = reinterpret_cast<uint16_t*>(tmp);
+    const float step = getDcOffsetStep();
+    float offset = dcOffset;
+    for (size_t i = 0; i < getBufferLength(); i++) {
+      offset = std::max<float>(INT16_MIN, offset - step);
+      const uint16_t us = ((uint16_t)(int16_t)lroundf(offset)) ^ 0x8000U;
+      t[i * CH_NUM + channelIndexRL] = (dac_mode & I2S_DAC_CHANNEL_RIGHT_EN) ? us : 0;
+      t[i * CH_NUM + (1 - channelIndexRL)] = (dac_mode & I2S_DAC_CHANNEL_LEFT_EN) ? us : 0;
+    }
     const bool wrote = writeTxDmaBuffer(tmp, sizeof(tmp), 1, tx_ticks_to_wait);
-    log_v("handleTxIdle zero wrote=%d", wrote);
+    if (wrote) {
+      dcOffset = offset;
+      if (dcOffset <= INT16_MIN) {
+        // 0V に下げ切ったら、次の音をハイパスの過去の値に引きずられずに始める
+        dcBlockPrevInput = 0.0f;
+        dcBlockPrevOutput = 0.0f;
+      }
+    }
+    log_v("handleTxIdle ramp-down offset=%d wrote=%d", (int)offset, wrote);
     return wrote;
   }
+}
+
+std::uint8_t Esp32BuiltinDacAudio::getTxIdlePayloadCount() const {
+  if (dcCutOffFrequency == 0) {
+    return super::getTxIdlePayloadCount();
+  }
+  // 下げる分 + DMA 本数(DMA の記述子をすべて 0V で埋める)
+  const std::uint32_t ramp_payloads = (kDcOffsetRampMsec + getBufferMsec() - 1) / getBufferMsec() + 1;
+  return (std::uint8_t)std::min<std::uint32_t>(UINT8_MAX, ramp_payloads + getBufferCount());
+}
+
+float Esp32BuiltinDacAudio::getDcOffsetStep() const {
+  // 1 サンプルあたりに動かす量。kDcOffsetRampMsec で 0V(INT16_MIN)と中点(0)の間を移る
+  return 32768.0f * 1000.0f / ((float)kDcOffsetRampMsec * (float)getSampRate());
 }
 
 void Esp32BuiltinDacAudio::fill(int16_t v) {
@@ -180,7 +219,9 @@ size_t Esp32BuiltinDacAudio::write(const std::uint8_t *buffer, std::size_t lengt
         const float filtered = alpha * (dcBlockPrevOutput + input - dcBlockPrevInput);
         dcBlockPrevInput = input;
         dcBlockPrevOutput = filtered;
-        const int32_t clipped = std::max<int32_t>(INT16_MIN, std::min<int32_t>(INT16_MAX, (int32_t)lroundf(filtered)));
+        // 0V で待っていたときは、音を書き始めたところから中点へ段階的に上げる
+        dcOffset = std::min(0.0f, dcOffset + getDcOffsetStep());
+        const int32_t clipped = std::max<int32_t>(INT16_MIN, std::min<int32_t>(INT16_MAX, (int32_t)lroundf(filtered + dcOffset)));
         s = (int16_t)clipped;
       }
       const uint16_t us = ((uint16_t)s)^0x8000U;  // XOR (signed -> unsigned)

@@ -150,9 +150,9 @@ void I2SAudio::_start(I2SAudioStatus s) {
   txIdlePendingCount = 0;
   status = s;
   if (handleTxIdle()) {
-    txIdlePendingCount = getBufferCount() - 1;
+    txIdlePendingCount = getTxIdlePayloadCount() - 1;
   } else {
-    txIdlePendingCount = getBufferCount();
+    txIdlePendingCount = getTxIdlePayloadCount();
   }
 }
 
@@ -180,6 +180,10 @@ void I2SAudio::zero() {
 
 bool I2SAudio::handleTxIdle() {
   return false;
+}
+
+std::uint8_t I2SAudio::getTxIdlePayloadCount() const {
+  return getBufferCount();
 }
 
 void I2SAudio::zeroTxDmaBuffer() {
@@ -227,7 +231,7 @@ bool I2SAudio::purge() {
   ringTxReadIdx = 0;
   ringTxWriteIdx = 0;
   txPrimed = false;
-  txIdlePendingCount = getBufferCount();
+  txIdlePendingCount = getTxIdlePayloadCount();
   _eventQueue(0);
   return true;
 }
@@ -300,7 +304,7 @@ bool I2SAudio::_eventQueue(TickType_t ticks_to_wait) {
       if (ringTxCount == 0) {
         txPrimed = false;
         if (txIdlePendingCount == 0 && !handlingTxIdle && status != I2SAudioStop) {
-          txIdlePendingCount = getBufferCount();
+          txIdlePendingCount = getTxIdlePayloadCount();
         }
         if (txIdlePendingCount > 0 && !handlingTxIdle && status != I2SAudioStop) {
           handlingTxIdle = true;
