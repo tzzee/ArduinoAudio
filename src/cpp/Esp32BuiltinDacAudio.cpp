@@ -180,7 +180,10 @@ void Esp32BuiltinDacAudio::zero() {
 }
 
 bool Esp32BuiltinDacAudio::handleTxIdle() {
-  const TickType_t tx_ticks_to_wait = pdMS_TO_TICKS(getBufferMsec() * getBufferCount());
+  // DMA が空くのを待たない。待つと呼び出し元(availableForWrite() など)が最大で DMA 本数ぶん止まり、
+  // 同じタスクで回している処理(j1772 では ADC の緊急遮断の判定)が遅れる。
+  // 書けなければ false を返し、呼び出し元が txIdlePendingCount を残して次の TX_DONE で書き直す。
+  const TickType_t tx_ticks_to_wait = 0;
   if (dacStatus != DacRunning) {
     log_d("handleTxIdle skip status=%d", dacStatus);
     return false;

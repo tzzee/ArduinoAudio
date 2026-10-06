@@ -88,6 +88,9 @@ class Esp32BuiltinDacAudio : public I2SAudio {
   /**
    * @brief 再生中に TX が空になったときの無音 payload を DMA へ直接補充する
    * DC カット無効時は、内蔵 DAC の中点を維持するデータを送る。
+   * DMA が空くのは待たない。書けなければ false を返し、次の TX_DONE で書き直される。
+   * @retval true 1 payload を DMA へ書けた
+   * @retval false 停止中、または DMA に空きが無く書けなかった
    */
   bool handleTxIdle() override;
 
