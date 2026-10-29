@@ -14,6 +14,10 @@
 #endif
 
 #include <Arduino.h>
+#include <esp_idf_version.h>
+#if ESP_IDF_VERSION_MAJOR >= 5
+#include <soc/i2s_struct.h>
+#endif
 
 static void initRtcPin(int pin) {
   if(0<=pin) {
@@ -45,6 +49,12 @@ I2SAudio::I2SAudio(std::uint16_t sampleRate, std::uint8_t bitDepth, std::uint8_t
         .dma_buf_len = (int)getBufferLength() ,
         .tx_desc_auto_clear = audioConfig.txDescAutoClear,
         // .use_apll = false
+#if ESP_IDF_VERSION_MAJOR >= 5
+        // _start() の i2s_set_clk と同じく 1 チャネル 32bit にする。ESP-IDF 5 の内蔵 DAC のクロックは
+        // サンプル周波数 × 2 × チャネルのビット数で、16bit のままだと 16kHz で分周が 255 を超え、ドライバを入れるときに
+        // 「sample rate is too small」を出す(鳴らすときの i2s_set_clk で直るので音は出ていた)
+        .bits_per_chan = I2S_BITS_PER_CHAN_32BIT,
+#endif
       }),
       ringBufferCount(ringBufferCount ? ringBufferCount : bufferCount),
       status(I2SAudioStop) {
@@ -142,6 +152,20 @@ void I2SAudio::_start(I2SAudioStatus s) {
       i2s_set_clk(audioConfig.port, i2sConfig.sample_rate, bits_cfg, clock_channel);
     } break;
   }
+#if ESP_IDF_VERSION_MAJOR >= 5
+  if ((((uint8_t)i2sConfig.mode & (uint8_t)I2S_MODE_DAC_BUILT_IN) == (uint8_t)I2S_MODE_DAC_BUILT_IN) &&
+      audioConfig.port == I2S_NUM_0) {
+    // ESP-IDF 5 の古い I2S のドライバは、内蔵 DAC のとき tx_chan_mod を設定せず(既定の 0 = 両チャネル)、FIFO のモードを
+    // 強制する bit(tx_fifo_mod_force_en)を立てる。ESP-IDF 4.4 は tx_chan_mod に、チャネルの形式が ONLY_RIGHT・ONLY_LEFT なら
+    // その値を 1 bit 右にずらした値(右は 1・左は 2)、それ以外ならその値を入れ、強制の bit は立てていなかった。
+    // 4.4 の版と始めたあとのレジスタを比べると、違いはこの 2 つと tx_msb_right だけだったので、4.4 と同じにそろえる
+    // (2026-10-29、j1772 の屋外機)。i2s_set_clk のたびに戻されるので、そのあと・始める前に入れ直す
+    const uint32_t fmt = (uint32_t)i2sConfig.channel_format;
+    I2S0.conf_chan.tx_chan_mod = (fmt < (uint32_t)I2S_CHANNEL_FMT_ONLY_RIGHT) ? fmt : (fmt >> 1);
+    I2S0.fifo_conf.tx_fifo_mod_force_en = 0;
+    I2S0.conf.tx_msb_right = 0;
+  }
+#endif
   ESP_ERROR_CHECK(i2s_start(audioConfig.port));
   rxDone = false;
   rxFilled = 0;

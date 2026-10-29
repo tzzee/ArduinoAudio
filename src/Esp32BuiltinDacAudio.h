@@ -113,7 +113,8 @@ class Esp32BuiltinDacAudio : public I2SAudio {
   /**
    * @brief I2S のピンを設定する
    * @details モノラルで送るときは使う側の DAC だけを有効にする。モノラルでは左右に同じデータが出るため、
-   * i2s_set_pin(NULL) で両方を有効にすると反対側のピンにも音が出る。反対側のピンには触れない
+   * i2s_set_pin(NULL) で両方を有効にすると反対側のピンにも音が出る。反対側のピンには触れない。
+   * ESP-IDF 5 では、有効にした DAC のピンを RTC のパッド(アナログ出力)にもする(古い I2S のドライバがしないため)
    * @param [in] pin ピン設定。NULL のときは内蔵 DAC
    * @return 設定の結果
    */

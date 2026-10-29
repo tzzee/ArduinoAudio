@@ -9,6 +9,10 @@
 #include <algorithm>
 #include <math.h>
 #include <string.h>
+#include <esp_idf_version.h>
+#if ESP_IDF_VERSION_MAJOR >= 5
+#include <driver/rtc_io.h>
+#endif
 
 // 片側の DAC だけを使うときはモノラル(ONLY_RIGHT/ONLY_LEFT)で送り、DMA のデータを半分にする。
 // ESP32 の I2S は 16bit のモノラルで隣り合う 2 サンプルが入れ替わって出るため、書く位置(i ^ 1)で打ち消す。
@@ -93,11 +97,47 @@ void Esp32BuiltinDacAudio::putSample(std::uint16_t* t, std::size_t i, std::uint1
   }
 }
 
+#if ESP_IDF_VERSION_MAJOR >= 5
+/**
+ * @brief 内蔵 DAC の出力ピンをアナログ出力用の RTC のパッドにする(ESP-IDF 4.4 の dac_output_enable() の dac_rtc_pad_init と同じ)
+ * @details ESP-IDF 5 の古い I2S のドライバの i2s_set_dac_mode() は DAC の電源を入れるだけで、ピンを RTC のパッドに
+ *          切り替えない(4.4 は dac_output_enable() で切り替えていた。5 の新しい DAC のドライバも gpio_config_as_analog() で
+ *          切り替える)。4.4 と同じ状態にそろえる(2026-10-29。j1772 の屋外機で音が出なかった原因は別で、
+ *          ArduinoSound の SOUND_WAVEFORM_BELL の静的な初期化の順番だった)
+ * @param [in] dac_mode DAC 出力チャンネル設定
+ */
+static void initBuiltinDacPads(i2s_dac_mode_t dac_mode) {
+  const gpio_num_t pins[] = {GPIO_NUM_25, GPIO_NUM_26};  // DAC1(右)・DAC2(左)
+  const bool enabled[] = {(dac_mode & I2S_DAC_CHANNEL_RIGHT_EN) != 0, (dac_mode & I2S_DAC_CHANNEL_LEFT_EN) != 0};
+  for (std::size_t i = 0; i < 2; i++) {
+    if (!enabled[i]) {
+      continue;
+    }
+    if (rtc_gpio_init(pins[i]) != ESP_OK ||
+        rtc_gpio_set_direction(pins[i], RTC_GPIO_MODE_DISABLED) != ESP_OK ||
+        rtc_gpio_pullup_dis(pins[i]) != ESP_OK ||
+        rtc_gpio_pulldown_dis(pins[i]) != ESP_OK) {
+      log_e("Esp32BuiltinDacAudio: DAC pad init failed (GPIO%d)", static_cast<int>(pins[i]));
+    }
+  }
+}
+#endif
+
 esp_err_t Esp32BuiltinDacAudio::setPin(const i2s_pin_config_t* pin) {
   if (pin == NULL && getChannelNum() == 1) {
-    return i2s_set_dac_mode(dac_mode);
+    const esp_err_t err = i2s_set_dac_mode(dac_mode);
+#if ESP_IDF_VERSION_MAJOR >= 5
+    initBuiltinDacPads(dac_mode);
+#endif
+    return err;
   }
-  return super::setPin(pin);
+  const esp_err_t err = super::setPin(pin);
+#if ESP_IDF_VERSION_MAJOR >= 5
+  if (pin == NULL) {
+    initBuiltinDacPads(I2S_DAC_CHANNEL_BOTH_EN);  // i2s_set_pin(NULL) は両方の DAC を使う
+  }
+#endif
+  return err;
 }
 
 Esp32BuiltinDacAudio::~Esp32BuiltinDacAudio() {
